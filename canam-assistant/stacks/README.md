@@ -6,8 +6,8 @@ Test each voice stack by checking out its branch and copying the matching `.env.
 |---|--------|-----------|----------|--------|
 | 1 | `ElevenLabs-Twilio` | Twilio | ElevenLabs Agents | Integrated |
 | 2 | `Plivo-Sarvam` | Plivo | Sarvam STT+LLM+TTS | **Ready to test** |
-| 3 | `FreJun-Teler` | FreJun Teler | FreJun (full stack) | Stub |
-| 4 | `Plivo-ElevenLabs` | Plivo | ElevenLabs Agents | Configured |
+| 3 | `FreJun-Teler-full-stack` | FreJun Teler | FreJun (full stack) | Stub |
+| 4 | `Plivo-ElevenLabs` | Plivo | ElevenLabs Agents | Config ready |
 | 5 | `Smallest-ai-Trikon` | Trikon/Smallest | Smallest.ai | Stub |
 | 6 | `Exotel-Sarvam` | Exotel | Sarvam STT+LLM+TTS | Stub |
 
