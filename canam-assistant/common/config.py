@@ -7,7 +7,7 @@ load_dotenv()
 # Stack 1: telephony=twilio,  voice=elevenlabs
 # Stack 2: telephony=plivo,   voice=sarvam
 # Stack 4: telephony=plivo,   voice=elevenlabs
-STACK_NAME = os.getenv("STACK_NAME", "ElevenLabs-Twilio")
+STACK_NAME = os.getenv("STACK_NAME", "Plivo-ElevenLabs")
 TELEPHONY_PROVIDER = os.getenv("TELEPHONY_PROVIDER", os.getenv("AUDIO_PROVIDER", "twilio")).lower()
 VOICE_AI_PROVIDER = os.getenv("VOICE_AI_PROVIDER", "elevenlabs").lower()
 
