@@ -1,0 +1,18 @@
+.button-container {
+    display: flex;
+    flex-direction: row;
+    justify-content: center;
+}
+
+.button-container .active {
+    box-shadow: 0 4px 4px 0 rgba(67, 60, 61, 0.3), 0 8px 12px 6px rgb(60 64 67 / 15%) !important;
+    border: 2px solid #000 !important;
+    background-color: #f44242 !important;
+    color: #FFF;
+}
+
+.status-container {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}

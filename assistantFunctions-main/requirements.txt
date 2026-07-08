@@ -1,0 +1,8 @@
+functions-framework==3.*
+google-generativeai
+firebase_admin
+twilio
+python-dotenv==1.0.1
+google-cloud-bigquery
+sendgrid
+google-cloud-pubsub

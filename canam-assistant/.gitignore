@@ -1,0 +1,23 @@
+# ignore .venc
+venv
+
+# ignore python cache
+*.pyc
+# ignore environment variables
+.env
+
+# ignore editor files
+.vscode
+.idea
+
+# ignore other editor files
+*.swp
+
+# ignore coverage files
+.coverage
+htmlcov/
+
+# ignore test results
+.pytest_cache
+
+service_account_key.json

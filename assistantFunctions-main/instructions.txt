@@ -1,0 +1,2 @@
+export CLOUDSDK_PYTHON=/opt/homebrew/bin/python3.10
+gcloud run deploy telephonic-call-status-updates-processor --source .

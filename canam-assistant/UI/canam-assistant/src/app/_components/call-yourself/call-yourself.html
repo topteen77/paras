@@ -1,0 +1,51 @@
+
+<button class="call-button" [ngClass]="buttonClass"  role="button" (click)="currentState.set(callYourselfStates.InitCall)">Call Yourself</button>
+
+@switch(currentState()) {
+    @case(callYourselfStates.InitCall) {
+        <div class="modal" [ngClass]="modalPanelClass">
+            <!-- Modal content -->
+            <div class="modal-content" [ngClass]="modalContentClass">
+                <span (click)="currentState.set(callYourselfStates.Initial)" class="close text-align-end">&times;</span>
+                <form [formGroup]="formGroup">
+                    <div class="input-container">
+                        <input type="text" class="call-input" formControlName="name" placeholder="Enter your name" />
+                        <input type="text" class="call-input" formControlName="phoneNumber" placeholder="Enter your phone number" />
+                    </div>
+                    <div class="button-container">
+                        <button class="call-button" [ngClass]="buttonClass" [disabled]="!formGroup.valid" role="button" (click)="callYourself()">Receive Call Now</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    }
+    @case (callYourselfStates.Calling) {
+        <div class="modal" [ngClass]="modalPanelClass">
+            <!-- Modal content -->
+            <div class="modal-content text-align-center">
+                <h2>Calling...</h2>
+                <p>Please wait.</p>
+            </div>
+        </div>
+    }
+    @case (callYourselfStates.CallSuccess) {
+        <div class="modal" [ngClass]="modalPanelClass">
+            <!-- Modal content -->
+            <div class="modal-content" [ngClass]="modalContentClass">
+                <span (click)="currentState.set(callYourselfStates.Initial)" class="close text-align-end">&times;</span>
+                <h2 class="text-align-center">Done</h2>
+                <p class="text-align-center">You will get a call from an international number shortly.</p>
+            </div>
+        </div>
+    }
+    @case (callYourselfStates.CallFailed) {
+        <div class="modal" [ngClass]="modalPanelClass">
+            <!-- Modal content -->
+            <div class="modal-content" [ngClass]="modalContentClass">
+                <span (click)="currentState.set(callYourselfStates.Initial)" class="close text-align-end">&times;</span>
+                <h2 class="text-align-center">Call Failed</h2>
+                <p class="text-align-center">There was an error while trying to call you. Please try again later.</p>
+            </div>
+        </div>
+    }
+}

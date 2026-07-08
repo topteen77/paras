@@ -1,0 +1,31 @@
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+ELEVEN_LABS_AGENT_ID = os.getenv("ELEVENLABS_AGENT_ID")
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
+TWILIO_ACCOUNT_SID = os.getenv('TWILIO_ACCOUNT_SID')
+TWILIO_AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN')
+TWILIO_PHONE_NUMBER = os.getenv('TWILIO_PHONE_NUMBER')
+NGROK_URL = os.getenv('NGROK_URL')
+PROJECT_ID = os.getenv('PROJECT_ID')
+GENAI_MODEL_NAME = os.getenv('GENAI_MODEL_NAME')
+GENAI_API_KEY = os.getenv('GENAI_API_KEY')
+WHATSAPP_TEMPLATE_ACTION_REQUIRED_NAME = os.getenv('WHATSAPP_TEMPLATE_ACTION_REQUIRED_NAME')
+TWILIO_WHATSAPP_PHONE_NUMBER = os.getenv('TWILIO_WHATSAPP_PHONE_NUMBER')
+WEB_SERVER_URL = os.getenv('WEB_SERVER_URL', 'http://127.0.0.1:8000')
+PROJECT_ID = os.getenv('PROJECT_ID')
+BIG_QUERY_DATASET_ID = os.getenv('BIG_QUERY_DATASET_ID')
+PORT = int(os.getenv('PORT', 8080))
+SENDER_EMAIL_USERNAME = os.environ.get('SENDER_EMAIL_USERNAME')
+SENDER_EMAIL_PASSWORD = os.environ.get('SENDER_EMAIL_PASSWORD')
+AGENT_EMAIL_ID = os.environ.get('AGENT_EMAIL_ID')
+
+
+print("Configuration loaded:")
+print(f"  ELEVEN_LABS_AGENT_ID: {'*' * 5 if ELEVEN_LABS_AGENT_ID else 'Not set'}")
+print(f"  ELEVENLABS_API_KEY: {'*' * 5 if ELEVENLABS_API_KEY else 'Not set'}")
+print(f"  NGROK_URL: {NGROK_URL if NGROK_URL else 'Not set'}")
+print(f"  TWILIO_ACCOUNT_SID: {'*' * 5 if TWILIO_ACCOUNT_SID else 'Not set'}")
+print(f"  TWILIO_AUTH_TOKEN: {'*' * 5 if TWILIO_AUTH_TOKEN else 'Not set'}")
