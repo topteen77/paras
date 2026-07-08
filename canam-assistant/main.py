@@ -20,7 +20,14 @@ app.include_router(websocket_routes.router, prefix="/ws", tags=["WebSocket Media
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "canam-assistant", "stack": "ElevenLabs-Twilio"}
+    from common.config import STACK_NAME, TELEPHONY_PROVIDER, VOICE_AI_PROVIDER
+    return {
+        "status": "ok",
+        "service": "canam-assistant",
+        "stack": STACK_NAME,
+        "telephony": TELEPHONY_PROVIDER,
+        "voice_ai": VOICE_AI_PROVIDER,
+    }
 
 
 if __name__ == "__main__":

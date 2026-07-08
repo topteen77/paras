@@ -1,136 +1,156 @@
 import os
-from fastapi import APIRouter, Request
-from fastapi import UploadFile
+from urllib.parse import unquote
+
+from fastapi import APIRouter, Request, UploadFile
 from fastapi.responses import HTMLResponse
-from twilio.twiml.voice_response import VoiceResponse, Connect
 from pathlib import Path
 import pandas as pd
-from common.config import (
-    STATUS_COMPLETE_TASK_DELAY_IN_SECONDS,
+from twilio.twiml.voice_response import VoiceResponse, Connect
+
+from common.config import STATUS_COMPLETE_TASK_DELAY_IN_SECONDS, TELEPHONY_PROVIDER
+from common.functions import (
+    add_call_staus_to_pubsub,
+    create_scheduled_call_record,
+    create_task,
+    handle_failed_calls,
+    log_call_to_firestore_status_update,
+    proces_scheduled_calls,
+    write_to_bigquery,
 )
-from common.functions import add_call_staus_to_pubsub, create_scheduled_call_record, create_task, handle_failed_calls, log_call_to_firestore_status_update, proces_scheduled_calls, write_to_bigquery
+from common.telephony import create_outbound_call, get_call_sid_from_callback, get_call_status_from_callback
+
 router = APIRouter()
+
+
+def _stream_url(hostname: str, to_phone_number: str, internal_id: str) -> str:
+    return f"wss://{hostname}/ws/media-stream/{to_phone_number}/{internal_id}"
+
+
+def _build_answer_xml(hostname: str, to_phone_number: str, internal_id: str) -> str:
+    stream_url = _stream_url(hostname, to_phone_number, internal_id)
+    if TELEPHONY_PROVIDER == "plivo":
+        return f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Stream bidirectional="true" keepCallAlive="true" contentType="audio/x-mulaw;rate=8000">{stream_url}</Stream>
+</Response>"""
+    response = VoiceResponse()
+    connect = Connect()
+    connect.stream(url=stream_url)
+    response.append(connect)
+    return str(response)
+
+
 @router.post("/make-call")
 async def make_call(request: Request):
     data = await request.json()
     to_phone_number = data.get("to")
     internal_id = data.get("internal_id", "")
-    print(f"[internal_id={internal_id}] [make_call] Received request to make a call. to_phone_number={to_phone_number}")
     if not to_phone_number:
-        print(f"[internal_id={internal_id}] [make_call] Error: Phone number is required.")
         return {"error": "Phone number is required"}
-    response = create_scheduled_call_record(
-        to_phone_number=to_phone_number, 
-        internal_id=internal_id,   
+    return create_scheduled_call_record(
+        to_phone_number=to_phone_number,
+        internal_id=internal_id,
         filename="N/A",
-        name=""
+        name=data.get("name", ""),
     )
-    print(f"[internal_id={internal_id}] [make_call] Scheduled call record created.")
-    return response
+
+
+@router.post("/make-call-direct")
+async def make_call_direct(request: Request):
+    """Initiate outbound call immediately (local Plivo/Twilio testing)."""
+    data = await request.json()
+    to_phone_number = data.get("to")
+    internal_id = data.get("internal_id", "")
+    if not to_phone_number:
+        return {"error": "Phone number is required"}
+    if not internal_id:
+        from uuid import uuid4
+        internal_id = str(uuid4())
+    result = create_outbound_call(to_phone_number, internal_id)
+    return result
+
 
 @router.post("/call/status/completed/{to_phone_number}/{internal_id}/{call_sid}")
-async def call_status_callback(request: Request, to_phone_number: str, internal_id: str, call_sid: str):
-    print(f"[internal_id={internal_id}] [call_status_callback] Received call status completed callback for to_phone_number={to_phone_number}, call_sid={call_sid}")
-    form_data = await request.form()
-    print(f"[internal_id={internal_id}] [call_status_callback] Form data received: {form_data}")
-    add_call_staus_to_pubsub(call_sid, internal_id, to_phone_number, 'completed')
+async def call_status_completed(request: Request, to_phone_number: str, internal_id: str, call_sid: str):
+    to_phone_number = unquote(to_phone_number)
+    add_call_staus_to_pubsub(call_sid, internal_id, to_phone_number, "completed")
     return {"status": "ok"}
+
 
 @router.post("/call/status/{to_phone_number}/{internal_id}")
 async def call_status_callback(request: Request, to_phone_number: str, internal_id: str):
-    print(f"[internal_id={internal_id}] [call_status_callback] Received call status callback for to_phone_number={to_phone_number}, internal_id={internal_id}")
+    to_phone_number = unquote(to_phone_number)
     form_data = await request.form()
-    call_sid = form_data.get("CallSid")
-    call_status = form_data.get("CallStatus")
-    print(f"[internal_id={internal_id}] [call_status_callback] Call status update: CallSid={call_sid}, Status={call_status}, Internal ID={internal_id}")
-    if call_status != 'completed':
-        print(f"[internal_id={internal_id}] [call_status_callback] Adding call status '{call_status}' to pubsub for CallSid={call_sid}, internal_id={internal_id}")
+    form_dict = dict(form_data)
+    call_sid = get_call_sid_from_callback(form_dict)
+    call_status = get_call_status_from_callback(form_dict)
+
+    if call_status != "completed":
         add_call_staus_to_pubsub(call_sid, internal_id, to_phone_number, call_status)
     else:
-        print(f"[internal_id={internal_id}] [call_status_callback] Call status is 'completed'. Creating delayed task for CallSid={call_sid}, internal_id={internal_id}")
         create_task(
             request.url.hostname,
             f"call/status/completed/{to_phone_number}/{internal_id}/{call_sid}",
             data={},
-            delay_seconds=STATUS_COMPLETE_TASK_DELAY_IN_SECONDS
+            delay_seconds=STATUS_COMPLETE_TASK_DELAY_IN_SECONDS,
         )
-    print(f"[internal_id={internal_id}] [call_status_callback] Writing call status to BigQuery for CallSid={call_sid}, internal_id={internal_id}")
+
     write_to_bigquery(internal_id, call_sid, to_phone_number, call_status)
-    print(f"[internal_id={internal_id}] [call_status_callback] Logging call status update to Firestore for CallSid={call_sid}, internal_id={internal_id}")
     can_retry = log_call_to_firestore_status_update(internal_id, to_phone_number, call_status)
     if can_retry:
-        print(f"[internal_id={internal_id}] [call_status_callback] Call {call_sid} can be retried. Scheduling retry. internal_id={internal_id}")
         handle_failed_calls(call_status, to_phone_number, internal_id, request.url.hostname)
-    else:
-        print(f"[internal_id={internal_id}] [call_status_callback] Call {call_sid} cannot be retried. internal_id={internal_id}")
     return {"status": "ok"}
 
+
 @router.api_route("/outgoing-call/{to_phone_number}/{internal_id}", methods=["GET", "POST"])
-async def handle_outgoing_call(request: Request,to_phone_number: str,internal_id: str):
-    print(f"Handling outgoing call to: {to_phone_number} with internal ID: {internal_id}")
-    """Handle outgoing call and return TwiML response to connect to Media Stream."""
-    print(f"[internal_id={internal_id}] [handle_outgoing_call] Handling outgoing call to: {to_phone_number} with internal ID: {internal_id}")
-    response = VoiceResponse()
-    connect = Connect()
-    # Ensure the WebSocket URL is correct based on your NGROK setup and main app's router prefix
-    connect.stream(url=f'wss://{request.url.hostname}/ws/media-stream/{to_phone_number}/{internal_id}') # Assuming /ws prefix for websocket router
-    response.append(connect)
-    return HTMLResponse(content=str(response), media_type="application/xml")
+async def handle_outgoing_call(request: Request, to_phone_number: str, internal_id: str):
+    to_phone_number = unquote(to_phone_number)
+    xml = _build_answer_xml(request.url.hostname, to_phone_number, internal_id)
+    return HTMLResponse(content=xml, media_type="application/xml")
+
 
 @router.post("/twilio/inbound_call")
 async def handle_incoming_call(request: Request):
+    import uuid
     form_data = await request.form()
-    call_sid = form_data.get("CallSid", "Unknown")
     from_number = form_data.get("From", "Unknown")
-    internal_id = form_data.get("internal_id", "")
-    print(f"[internal_id={internal_id}] [handle_incoming_call] Incoming call: CallSid={call_sid}, From={from_number}")
-    response = VoiceResponse()
-    connect = Connect()
-    connect.stream(url=f"wss://{request.url.hostname}/ws/media-stream")
-    response.append(connect)
-    return HTMLResponse(content=str(response), media_type="application/xml")
+    internal_id = str(uuid.uuid4())
+    xml = _build_answer_xml(request.url.hostname, from_number, internal_id)
+    return HTMLResponse(content=xml, media_type="application/xml")
+
 
 @router.post("/create-scheduled-task")
 async def create_scheduled_task(request: Request):
-    print(f"[create_scheduled_task] Received request to create scheduled task.")
-    hostname = request.url.hostname
-    print(f"[create_scheduled_task] Creating task for hostname={hostname}")
-    response = create_task(hostname, 'process-scheduled-calls', {}, 20)
-    print(f"[create_scheduled_task] Task created: {response.name}")
-    return {'task_name': response.name}
+    response = create_task(request.url.hostname, "process-scheduled-calls", {}, 20)
+    if response is None:
+        return {"error": "Failed to create task"}
+    return {"task_name": response.name}
+
 
 @router.post("/process-scheduled-calls")
 async def scheduled_calls(request: Request):
     return proces_scheduled_calls(request.url.hostname)
-    
+
+
 @router.post("/schedule-calls")
 async def schedule_call(file: UploadFile):
-    print(f"[schedule_call] Received file upload: filename={file.filename}")
     file_path = Path("uploads") / file.filename
-    allowed_extensions = ['.xlsx', '.xls', '.xlsm']
-    file_extension = Path(file.filename).suffix.lower()
-    if file_extension not in allowed_extensions:
-        print(f"[schedule_call] Invalid file extension: {file_extension} for filename={file.filename}")
+    allowed_extensions = [".xlsx", ".xls", ".xlsm"]
+    if Path(file.filename).suffix.lower() not in allowed_extensions:
         return {"filename": file.filename, "message": "only excel files allowed."}
 
     os.makedirs(file_path.parent, exist_ok=True)
     with open(file_path, "wb") as f:
         f.write(await file.read())
-    print(f"[schedule_call] Saved file to {file_path}")
 
     df = pd.read_excel(file_path)
-    print(f"[schedule_call] Read {len(df)} records from Excel file: {file.filename}")
-
     for _, row in df.iterrows():
-        internal_id = row.get('internal_id', '')
-        print(f"[internal_id={internal_id}] [schedule_call] Scheduling call for phonenumber={row.get('phonenumber')}, name={row.get('name', 'Unknown')}")
         create_scheduled_call_record(
-            to_phone_number=row.get('phonenumber'),
+            to_phone_number=row.get("phonenumber"),
             filename=file.filename,
-            internal_id="",
-            name=row.get('name', 'Unknown')
+            internal_id=str(row.get("internal_id") or ""),
+            name=row.get("name", "Unknown"),
         )
 
     file_path.unlink()
-    print(f"[schedule_call] Cleaned up uploaded file: {file_path}")
     return {"filename": file.filename, "message": "Calls scheduled successfully."}

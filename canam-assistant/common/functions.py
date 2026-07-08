@@ -114,7 +114,7 @@ def log_call_to_firestore_status_update(internal_id: str, to_number: str, call_s
         doc = doc_ref.get()
         can_retry = False
         if doc.exists:
-            current_retry_count = doc.get('retry_count')
+            current_retry_count = doc.get('retry_count') or 0
             print(f"[log_call_to_firestore_status_update][internal_id: {internal_id}] Current retry count: {current_retry_count}")
             new_retry_count = current_retry_count
             if call_status in ['failed', 'busy', 'no-answer']:
@@ -241,16 +241,10 @@ def end_call_by_internal_id(internal_id: str, to_phone_number: str):
         return {"status": "error", "message": str(e)}
 
 def end_call(call_sid: str):
-    """End a call using Twilio's API."""
+    """End a call using the configured telephony provider."""
+    from common.telephony import end_call as telephony_end_call
     print(f"[end_call] Attempting to end call with call_sid: {call_sid}")
-    client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-    try:
-        call = client.calls(call_sid).update(status='completed')
-        print(f"[end_call][call_sid: {call_sid}] Call ended successfully.")
-        return {"status": "success", "message": f"Call {call_sid} ended."}
-    except Exception as e:
-        print(f"[end_call][call_sid: {call_sid}] Error ending call: {str(e)}")
-        return {"status": "error", "message": str(e)}
+    return telephony_end_call(call_sid)
 
 def handle_failed_calls(call_status, to_phone_number, internal_id, hostname):
     try:
