@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Canam Call Dashboard</title>
+  <link rel="stylesheet" href="/dashboard/dashboard.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-icon">📞</span>
+        <span class="brand-text">Canam Calls</span>
+      </div>
+      <nav class="nav">
+        <button class="nav-item active" data-view="logs">Voice Logs</button>
+        <button class="nav-item" data-view="recordings">Recordings</button>
+        <button class="nav-item" data-view="tasks">Calling Tasks</button>
+        <button class="nav-item" data-view="campaign">New Campaign</button>
+        <button class="nav-item" data-view="integrations">Integrations</button>
+        <button class="nav-item" data-view="configuration">Configuration</button>
+      </nav>
+      <div class="sidebar-footer">
+        <a href="/docs" target="_blank">API Docs</a>
+        <a href="/health" target="_blank">Health</a>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <h1 id="page-title">Voice Logs</h1>
+          <p class="subtitle" id="page-subtitle">Monitor outbound calls, recordings, and lead status</p>
+        </div>
+        <div class="stats-row" id="stats-row"></div>
+      </header>
+
+      <section class="view active" id="view-logs">
+        <div class="toolbar">
+          <input type="search" id="search-input" placeholder="Search phone, name, call ID..." />
+          <select id="status-filter">
+            <option value="">All statuses</option>
+            <option value="completed">Completed</option>
+            <option value="exported">Exported</option>
+            <option value="busy">Busy</option>
+            <option value="no-answer">No answer</option>
+            <option value="failed">Failed</option>
+            <option value="initiated">Initiated</option>
+          </select>
+          <select id="lead-filter">
+            <option value="">All leads</option>
+            <option value="hot">Hot</option>
+            <option value="warm">Warm</option>
+            <option value="cold">Cold</option>
+            <option value="unclassified">Unclassified</option>
+          </select>
+          <button class="btn secondary" id="refresh-btn">Refresh</button>
+        </div>
+        <div class="split">
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>From / To</th>
+                  <th>Direction</th>
+                  <th>Status</th>
+                  <th>Lead</th>
+                  <th>Hangup</th>
+                  <th>Duration</th>
+                  <th>Cost</th>
+                </tr>
+              </thead>
+              <tbody id="calls-tbody"></tbody>
+            </table>
+          </div>
+          <aside class="detail-panel" id="call-detail">
+            <div class="detail-empty">Select a call to view transcript, recording, and lead details.</div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="view" id="view-recordings">
+        <div class="cards" id="recordings-grid"></div>
+      </section>
+
+      <section class="view" id="view-tasks">
+        <div class="toolbar">
+          <select id="task-status-filter">
+            <option value="">All task statuses</option>
+            <option value="scheduled">Scheduled</option>
+            <option value="initiated">Initiated</option>
+          </select>
+          <button class="btn primary" id="run-batch-btn">Run scheduled batch</button>
+          <button class="btn secondary" id="refresh-tasks-btn">Refresh</button>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Phone</th>
+                <th>Status</th>
+                <th>Scheduled</th>
+                <th>Retries</th>
+                <th>Source</th>
+              </tr>
+            </thead>
+            <tbody id="tasks-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="view" id="view-campaign">
+        <div class="campaign-grid">
+          <div class="card">
+            <h2>Schedule single call</h2>
+            <p>Queues one number in Firestore and starts the batch processor.</p>
+            <form id="single-call-form" class="form">
+              <label>
+                Name
+                <input type="text" name="name" placeholder="Student name" required />
+              </label>
+              <label>
+                Phone (E.164)
+                <input type="tel" name="to" placeholder="+919876543210" required />
+              </label>
+              <button type="submit" class="btn primary">Schedule call</button>
+            </form>
+            <div class="form-note" id="single-call-result"></div>
+          </div>
+
+          <div class="card">
+            <h2>Call now (direct)</h2>
+            <p>Dials immediately via Plivo/Twilio — best for quick testing.</p>
+            <form id="direct-call-form" class="form">
+              <label>
+                Phone (E.164)
+                <input type="tel" name="to" placeholder="+919876543210" required />
+              </label>
+              <button type="submit" class="btn warning">Call now</button>
+            </form>
+            <div class="form-note" id="direct-call-result"></div>
+          </div>
+
+          <div class="card wide">
+            <h2>Bulk campaign (Excel)</h2>
+            <p>Upload a spreadsheet with columns: <code>phonenumber</code>, <code>name</code>, optional <code>internal_id</code>.</p>
+            <form id="batch-form" class="form inline">
+              <input type="file" name="file" accept=".xlsx,.xls,.xlsm" required />
+              <button type="submit" class="btn primary">Upload &amp; schedule</button>
+            </form>
+            <div class="form-note" id="batch-result"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="view-integrations">
+        <div class="toolbar">
+          <button class="btn secondary" id="refresh-integrations-btn">Refresh status</button>
+        </div>
+
+        <div class="integrations-layout">
+          <div class="card wide">
+            <h2>Active stack</h2>
+            <p id="active-stack-summary">Loading...</p>
+            <div class="stack-grid" id="stack-grid"></div>
+          </div>
+
+          <div class="card wide">
+            <h2>API providers</h2>
+            <p class="subtitle-inline">Connectivity and credits for telephony, voice AI, and infrastructure.</p>
+            <div class="provider-grid" id="provider-grid"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="view-configuration">
+        <div class="toolbar">
+          <button class="btn secondary" id="refresh-config-btn">Refresh configuration</button>
+        </div>
+        <div id="configuration-root" class="config-layout">
+          <div class="detail-empty">Loading configuration...</div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="toast" id="toast"></div>
+  <script src="/dashboard/dashboard.js"></script>
+</body>
+</html>

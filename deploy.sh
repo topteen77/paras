@@ -137,8 +137,7 @@ update_ngrok_url_in_env() {
 
 wait_for_health() {
   local port
-  port=$(grep -E '^PORT=' "${ENV_FILE}" | cut -d= -f2 | tr -d '[:space:]')
-  port="${port:-8080}"
+  port=$(get_app_port)
   local retries=30
   for ((i=1; i<=retries; i++)); do
     if curl -sf "http://localhost:${port}/health" &>/dev/null; then
@@ -148,6 +147,118 @@ wait_for_health() {
   done
   error "Service did not become healthy on port ${port}"
   return 1
+}
+
+get_app_port() {
+  local port="8080"
+  if [[ -f "${ENV_FILE}" ]]; then
+    port=$(grep -E '^PORT=' "${ENV_FILE}" | cut -d= -f2 | tr -d '[:space:]' || true)
+    port="${port:-8080}"
+  fi
+  echo "${port}"
+}
+
+NGROK_DASHBOARD_PORT="4040"
+
+is_port_in_use() {
+  local port="$1"
+  if command -v ss &>/dev/null; then
+    ss -tlnH "sport = :${port}" 2>/dev/null | grep -q .
+    return $?
+  fi
+  if command -v lsof &>/dev/null; then
+    lsof -iTCP:"${port}" -sTCP:LISTEN -t &>/dev/null
+    return $?
+  fi
+  return 1
+}
+
+is_project_container_name() {
+  local name="$1"
+  [[ "${name}" == "canam-assistant" || "${name}" == "canam-ngrok" || "${name}" == canam-assistant-* ]]
+}
+
+containers_on_port() {
+  local port="$1"
+  docker ps --format '{{.ID}}\t{{.Names}}\t{{.Ports}}' 2>/dev/null \
+    | awk -v port=":${port}->" '$0 ~ port {print $1 "\t" $2}'
+}
+
+stop_container_by_id() {
+  local container_id="$1"
+  [[ -z "${container_id}" ]] && return 0
+  docker stop "${container_id}" &>/dev/null || true
+  docker rm -f "${container_id}" &>/dev/null || true
+}
+
+free_port_if_project_container() {
+  local port="$1"
+  local label="$2"
+  local rows found=0
+  local container_id container_name
+
+  if ! is_port_in_use "${port}"; then
+    info "Port ${port} (${label}) is free."
+    return 0
+  fi
+
+  rows=$(containers_on_port "${port}" || true)
+  if [[ -z "${rows}" ]]; then
+    warn "Port ${port} (${label}) is in use by a non-Docker process. Stop it manually, then retry."
+    return 1
+  fi
+
+  while IFS=$'\t' read -r container_id container_name; do
+    [[ -z "${container_id}" ]] && continue
+    found=1
+    if is_project_container_name "${container_name}"; then
+      info "Stopping ${container_name} to free port ${port} (${label})..."
+      stop_container_by_id "${container_id}"
+    else
+      warn "Port ${port} (${label}) is used by '${container_name}'. Stop it manually, then retry."
+      return 1
+    fi
+  done <<< "${rows}"
+
+  if [[ "${found}" -eq 0 ]]; then
+    warn "Port ${port} (${label}) is in use but no Docker mapping was found. Stop the process manually."
+    return 1
+  fi
+
+  local wait_seconds=15
+  for ((i=1; i<=wait_seconds; i++)); do
+    if ! is_port_in_use "${port}"; then
+      info "Port ${port} (${label}) released."
+      return 0
+    fi
+    sleep 1
+  done
+
+  error "Port ${port} (${label}) is still in use after stopping project containers."
+  return 1
+}
+
+stop_project_containers() {
+  cd "${APP_DIR}"
+  info "Stopping project containers..."
+  docker compose down --remove-orphans 2>/dev/null || true
+
+  for name in canam-assistant canam-ngrok; do
+    if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "${name}"; then
+      info "Removing leftover container: ${name}"
+      docker rm -f "${name}" &>/dev/null || true
+    fi
+  done
+}
+
+ensure_ports_available() {
+  local app_port
+  app_port=$(get_app_port)
+
+  stop_project_containers
+
+  free_port_if_project_container "${app_port}" "API" || return 1
+  free_port_if_project_container "${NGROK_DASHBOARD_PORT}" "ngrok dashboard" || return 1
 }
 
 cmd_start() {
@@ -166,6 +277,8 @@ cmd_start() {
   setup_call_recordings
   check_env_values
 
+  ensure_ports_available
+
   info "Building and starting containers..."
   cd "${APP_DIR}"
   docker compose up -d --build
@@ -174,8 +287,7 @@ cmd_start() {
   wait_for_health
 
   local port
-  port=$(grep -E '^PORT=' "${ENV_FILE}" | cut -d= -f2 | tr -d '[:space:]')
-  port="${port:-8080}"
+  port=$(get_app_port)
 
   info "Fetching ngrok public URL..."
   if update_ngrok_url_in_env; then
@@ -217,8 +329,7 @@ cmd_start() {
 }
 
 cmd_stop() {
-  cd "${APP_DIR}"
-  docker compose down
+  stop_project_containers
   info "Containers stopped."
 }
 
@@ -228,7 +339,6 @@ cmd_logs() {
 }
 
 cmd_restart() {
-  cmd_stop
   cmd_start
 }
 

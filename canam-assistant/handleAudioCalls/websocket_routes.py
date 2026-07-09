@@ -8,12 +8,11 @@ from elevenlabs import ElevenLabs
 from elevenlabs.conversational_ai.conversation import Conversation, ConversationInitiationData
 from google.cloud import firestore
 
+from common.runtime_stack import get_telephony_provider, get_voice_ai_provider
 from common.config import (
     ELEVENLABS_API_KEY,
     ELEVEN_LABS_COLD_CALLING_AGENT_ID,
     SARVAM_API_KEY,
-    TELEPHONY_PROVIDER,
-    VOICE_AI_PROVIDER,
 )
 from common.post_call import link_call_uuid, save_transcript, try_deliver_report
 from common.functions import (
@@ -31,29 +30,32 @@ router = APIRouter()
 
 
 def log_conversation_to_firestore(conversation_id: str, to_number: str, internal_id: str):
-    db = firestore.Client()
-    doc_ref = (
-        db.collection("conversation-history")
-        .document(to_number)
-        .collection("calls")
-        .document(internal_id)
-    )
-    if doc_ref.get().exists:
-        doc_ref.set({"conversation_id": conversation_id}, merge=True)
+    try:
+        db = firestore.Client()
+        doc_ref = (
+            db.collection("conversation-history")
+            .document(to_number)
+            .collection("calls")
+            .document(internal_id)
+        )
+        if doc_ref.get().exists:
+            doc_ref.set({"conversation_id": conversation_id}, merge=True)
+    except Exception as exc:
+        print(f"[FIRESTORE] skip conversation log: {exc}")
 
 
 def _get_telephony_interface(websocket: WebSocket):
-    if TELEPHONY_PROVIDER == "plivo":
+    if get_telephony_provider() == "plivo":
         return PlivoAudioInterface(websocket)
-    if TELEPHONY_PROVIDER == "kommuno":
+    if get_telephony_provider() == "kommuno":
         return KommunoAudioInterface(websocket)
     return TwilioAudioInterface(websocket)
 
 
 async def _handle_telephony_message(audio_interface, data: dict):
-    if TELEPHONY_PROVIDER == "plivo":
+    if get_telephony_provider() == "plivo":
         await audio_interface.handle_plivo_message(data)
-    elif TELEPHONY_PROVIDER == "kommuno":
+    elif get_telephony_provider() == "kommuno":
         await audio_interface.handle_kommuno_message(data)
     else:
         await audio_interface.handle_twilio_message(data)
@@ -80,7 +82,7 @@ async def _run_elevenlabs_session(
     )
     conversation.start_session()
 
-    if TELEPHONY_PROVIDER == "kommuno":
+    if get_telephony_provider() == "kommuno":
         await audio_interface.send_session_start()
 
     conversation_id = None
@@ -134,7 +136,7 @@ async def _run_sarvam_session(
     def on_audio_in(pcm_bytes):
         pcm_buffer.append(pcm_bytes)
 
-    if TELEPHONY_PROVIDER == "plivo":
+    if get_telephony_provider() == "plivo":
         audio_interface.set_input_callback(on_audio_in)
     elif hasattr(audio_interface, "start"):
         audio_interface.start(on_audio_in)
@@ -194,10 +196,10 @@ async def _run_sarvam_session(
 @router.websocket("/media-stream/{to_phone_number}/{internal_id}")
 async def handle_media_stream(websocket: WebSocket, to_phone_number: str, internal_id: str):
     to_phone_number = unquote(to_phone_number)
-    print(f"[INIT] stack telephony={TELEPHONY_PROVIDER} voice={VOICE_AI_PROVIDER} phone={to_phone_number}")
+    print(f"[INIT] stack telephony={get_telephony_provider()} voice={get_voice_ai_provider()} phone={to_phone_number}")
     await websocket.accept()
 
-    if VOICE_AI_PROVIDER == "sarvam":
+    if get_voice_ai_provider() == "sarvam":
         if not SARVAM_API_KEY:
             await websocket.close(code=1008, reason="Sarvam API key not configured")
             return
@@ -209,7 +211,7 @@ async def handle_media_stream(websocket: WebSocket, to_phone_number: str, intern
     audio_interface = _get_telephony_interface(websocket)
 
     try:
-        if VOICE_AI_PROVIDER == "sarvam":
+        if get_voice_ai_provider() == "sarvam":
             await _run_sarvam_session(websocket, to_phone_number, internal_id, audio_interface)
         else:
             await _run_elevenlabs_session(websocket, to_phone_number, internal_id, audio_interface)
@@ -219,7 +221,7 @@ async def handle_media_stream(websocket: WebSocket, to_phone_number: str, intern
         print(f"[ERROR] WebSocket handler: {exc}")
         traceback.print_exc()
     finally:
-        if TELEPHONY_PROVIDER == "kommuno" and hasattr(audio_interface, "send_session_end"):
+        if get_telephony_provider() == "kommuno" and hasattr(audio_interface, "send_session_end"):
             try:
                 await audio_interface.send_session_end()
             except Exception:

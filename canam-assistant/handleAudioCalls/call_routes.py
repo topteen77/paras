@@ -7,7 +7,8 @@ from pathlib import Path
 import pandas as pd
 from twilio.twiml.voice_response import VoiceResponse, Connect
 
-from common.config import STATUS_COMPLETE_TASK_DELAY_IN_SECONDS, TELEPHONY_PROVIDER, WEB_SERVER_URL
+from common.runtime_stack import get_telephony_provider
+from common.config import STATUS_COMPLETE_TASK_DELAY_IN_SECONDS, WEB_SERVER_URL
 from common.functions import (
     add_call_staus_to_pubsub,
     create_scheduled_call_record,
@@ -47,7 +48,7 @@ def _build_answer_xml(to_phone_number: str, internal_id: str) -> str:
     stream_url = webhooks["websocket_url"]
     stream_status_url = webhooks["stream_status_url"]
     recording_url = recording_callback_url(internal_id)
-    if TELEPHONY_PROVIDER == "plivo":
+    if get_telephony_provider() == "plivo":
         return f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Record recordSession="true" callbackUrl="{recording_url}" callbackMethod="POST" />

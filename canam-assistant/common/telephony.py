@@ -2,11 +2,11 @@
 import re
 from urllib.parse import quote, urlparse
 
+from common.runtime_stack import get_telephony_provider
 from common.config import (
     PLIVO_AUTH_ID,
     PLIVO_AUTH_TOKEN,
     PLIVO_PHONE_NUMBER,
-    TELEPHONY_PROVIDER,
     TWILIO_ACCOUNT_SID,
     TWILIO_AUTH_TOKEN,
     TWILIO_PHONE_NUMBER,
@@ -64,7 +64,7 @@ def create_outbound_call(to_number: str, internal_id: str) -> dict:
     answer_url = webhooks["answer_url"]
     status_url = webhooks["hangup_url"]
 
-    if TELEPHONY_PROVIDER == "plivo":
+    if get_telephony_provider() == "plivo":
         import plivo
 
         if not PLIVO_AUTH_ID or not PLIVO_AUTH_TOKEN or not PLIVO_PHONE_NUMBER:
@@ -127,7 +127,7 @@ def end_call(call_sid: str) -> dict:
         return {"status": "error", "message": "Missing call SID"}
 
     try:
-        if TELEPHONY_PROVIDER == "plivo":
+        if get_telephony_provider() == "plivo":
             import plivo
 
             client = plivo.RestClient(PLIVO_AUTH_ID, PLIVO_AUTH_TOKEN)
@@ -162,13 +162,13 @@ def normalize_call_status(provider: str, raw_status: str) -> str:
 
 
 def get_call_sid_from_callback(form_data: dict) -> str:
-    if TELEPHONY_PROVIDER == "plivo":
+    if get_telephony_provider() == "plivo":
         return form_data.get("CallUUID") or form_data.get("call_uuid") or ""
     return form_data.get("CallSid") or ""
 
 
 def get_call_status_from_callback(form_data: dict) -> str:
-    if TELEPHONY_PROVIDER == "plivo":
+    if get_telephony_provider() == "plivo":
         raw = form_data.get("CallStatus") or form_data.get("Status") or ""
         return normalize_call_status("plivo", raw)
     return form_data.get("CallStatus") or ""
