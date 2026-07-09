@@ -25,5 +25,8 @@ sarvam-ai-api-key.txt
 # Uploads
 canam-assistant/uploads/
 
+# Call recordings (Q&A + audio)
+call-recordings/
+
 # OS
 .DS_Store

@@ -37,6 +37,58 @@ cp stacks/2-Plivo-Sarvam.env.example .env
 | `NGROK_AUTHTOKEN` | [ngrok](https://dashboard.ngrok.com) |
 | GCP service account | Firestore / Pub/Sub / Tasks |
 
+### Plivo Console — set callback URLs
+
+Open **http://localhost:8080/plivo/setup** (or `/health`) to see your exact URLs.
+
+For **inbound** calls (someone dials your Plivo number), create an XML Application in [Plivo Console](https://console.plivo.com):
+
+| Field | URL |
+|-------|-----|
+| **Answer URL** | `https://YOUR-NGROK/plivo/inbound` (POST) |
+| **Hangup URL** | `https://YOUR-NGROK/plivo/hangup` (POST) |
+| **Fallback Answer URL** | `https://YOUR-NGROK/plivo/inbound` (POST) |
+
+Then link that Application to your Plivo number.
+
+### After call ends — get Q&A and recording
+
+Each call produces a **post-call report** with transcript, Q&A pairs, and Plivo recording URL.
+
+| How to get data | URL |
+|-----------------|-----|
+| Single call report | `GET /call/report/{internal_id}` |
+| List recent calls | `GET /call/reports` |
+| Auto-push to your server | Set `POST_CALL_WEBHOOK_URL` in `.env` |
+
+Example report fields:
+```json
+{
+  "event": "call_completed",
+  "internal_id": "...",
+  "to_phone_number": "+91...",
+  "qa_pairs": [{"user_question": "Canada", "agent_answer": "Great choice! ..."}],
+  "transcript": [{"role": "user", "text": "..."}, {"role": "assistant", "text": "..."}],
+  "recording": {"url": "https://...", "duration_seconds": "120"},
+  "report_url": "https://your-ngrok/call/report/..."
+}
+```
+
+Recording is enabled automatically via Plivo `<Record recordSession="true">` in the answer XML. Plivo posts the recording URL to `/recording/ready/{internal_id}` when ready (usually within 1–2 minutes after hangup).
+
+For **outbound** tests (`/make-call-direct`), callback URLs are sent automatically in the API call — no Plivo Application answer URL needed. You still need ngrok on **port 8080**:
+
+```bash
+ngrok http --url=YOUR-SUBDOMAIN.ngrok-free.dev 8080
+```
+
+Verify webhooks reach your server — after answering a call, logs should show:
+```
+[PLIVO_RING] ...
+[PLIVO_ANSWER] ...
+[INIT] stack telephony=plivo voice=sarvam ...
+```
+
 ### Test a direct outbound call (bypasses scheduler)
 
 ```bash

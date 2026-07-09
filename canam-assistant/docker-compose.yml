@@ -16,6 +16,8 @@ services:
       - ./service_account_key.json:/app/service_account_key.json:ro
       # Persist uploaded Excel files during schedule-calls
       - ./uploads:/app/uploads
+      # Post-call Q&A + recording JSON/MP3 (repo root: Paras/call-recordings)
+      - ../call-recordings:/app/call-recordings
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')"]
       interval: 15s

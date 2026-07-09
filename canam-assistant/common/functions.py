@@ -107,6 +107,39 @@ def create_scheduled_call_record(to_phone_number: str, internal_id: str, filenam
         print(f"[create_scheduled_call_record][internal_id: {internal_id}] Error creating scheduled call record: {str(e)}")
         return {"error": str(e)}
 
+def log_call_to_firestore_initiated(call_sid: str, to_number: str, internal_id: str):
+    try:
+        print(f"[log_call_to_firestore_initiated][internal_id: {internal_id}] call_sid={call_sid}")
+        if not call_sid or not to_number or not internal_id:
+            return
+        db = firestore.Client()
+        doc_ref = db.collection("conversation-history").document(to_number)
+        if not doc_ref.get().exists:
+            doc_ref.set(
+                {"to_phone_number": to_number, "timestamp": datetime.now(timezone.utc)},
+                merge=True,
+            )
+        call_ref = doc_ref.collection("calls").document(internal_id)
+        retry_count = 0
+        existing = call_ref.get()
+        if existing.exists:
+            retry_count = (existing.to_dict() or {}).get("retry_count", 0)
+        call_ref.set(
+            {
+                "call_sid": call_sid,
+                "status": "initiated",
+                "conversation_id": "",
+                "internal_id": internal_id,
+                "timestamp": datetime.now(timezone.utc),
+                "status_update_timestamp": datetime.now(timezone.utc),
+                "retry_count": retry_count,
+            },
+            merge=True,
+        )
+    except Exception as e:
+        print(f"[log_call_to_firestore_initiated][internal_id: {internal_id}] Error: {e}")
+
+
 def log_call_to_firestore_status_update(internal_id: str, to_number: str, call_status: str):
     try:
         db = firestore.Client()

@@ -21,17 +21,33 @@ from common.config import (
 
 
 class SarvamVoiceAgent:
-    def __init__(self, audio_interface, executive_summary: str, on_agent_text=None, on_user_text=None):
+    _GOODBYE_MARKERS = ("goodbye", "good bye", "alvida", "अलविदा", "alvidaa")
+
+    def __init__(
+        self,
+        audio_interface,
+        executive_summary: str,
+        on_agent_text=None,
+        on_user_text=None,
+        on_hangup=None,
+    ):
         self.audio_interface = audio_interface
         self.on_agent_text = on_agent_text or (lambda t: None)
         self.on_user_text = on_user_text or (lambda t: None)
+        self.on_hangup = on_hangup
         self.conversation_id = str(uuid.uuid4())
         self._running = False
+        self._hangup_scheduled = False
         self._stt_ws = None
         self._audio_buffer = bytearray()
         self._processing = False
         self._client = SarvamAI(api_subscription_key=SARVAM_API_KEY)
         self.messages = [{"role": "system", "content": self._load_system_prompt(executive_summary)}]
+
+    @classmethod
+    def _is_goodbye(cls, text: str) -> bool:
+        lowered = (text or "").lower()
+        return any(marker in lowered for marker in cls._GOODBYE_MARKERS)
 
     def _load_system_prompt(self, executive_summary: str) -> str:
         prompt_path = Path(SARVAM_SYSTEM_PROMPT_PATH)
@@ -41,15 +57,19 @@ class SarvamVoiceAgent:
             base = (
                 "You are Monica, study abroad assistant for Canam Consultants. "
                 "Collect country, study level, timeline, location, callback time. "
-                "Keep replies under 2 sentences. End with Goodbye when done."
+                "Keep replies under 2 sentences. "
+                "End closing messages with Goodbye or अलविदा — the call hangs up automatically."
             )
         if executive_summary and executive_summary != "No executive summary available":
             base += f"\n\nPrior context:\n{executive_summary}"
         return base
 
-    async def start(self):
+    async def prepare(self):
+        """Connect STT; call speak_greeting() after telephony stream is ready."""
         self._running = True
         await self._connect_stt()
+
+    async def speak_greeting(self):
         greeting = (
             "Hello! Ready to explore your study abroad adventure? "
             "Which country are you most interested in studying in?"
@@ -57,6 +77,10 @@ class SarvamVoiceAgent:
         await self._speak(greeting)
         self.on_agent_text(greeting)
         self.messages.append({"role": "assistant", "content": greeting})
+
+    async def start(self):
+        await self.prepare()
+        await self.speak_greeting()
 
     async def stop(self):
         self._running = False
@@ -66,6 +90,20 @@ class SarvamVoiceAgent:
             except Exception:
                 pass
             self._stt_ws = None
+
+    def export_conversation(self) -> dict:
+        transcript = [
+            {"role": m["role"], "text": m["content"]}
+            for m in self.messages
+            if m.get("role") != "system" and m.get("content")
+        ]
+        from common.post_call import build_qa_pairs
+
+        return {
+            "conversation_id": self.conversation_id,
+            "transcript": transcript,
+            "qa_pairs": build_qa_pairs(self.messages),
+        }
 
     async def feed_audio(self, pcm16_8k: bytes):
         if not self._running or not pcm16_8k or not self._stt_ws:
@@ -82,7 +120,7 @@ class SarvamVoiceAgent:
     async def _connect_stt(self):
         self._stt_ws = await websockets.connect(
             "wss://api.sarvam.ai/speech-to-text/ws",
-            additional_headers={"api-subscription-key": SARVAM_API_KEY},
+            extra_headers={"api-subscription-key": SARVAM_API_KEY},
             ping_interval=20,
         )
         await self._stt_ws.send(json.dumps({
@@ -124,9 +162,11 @@ class SarvamVoiceAgent:
                 model=SARVAM_CHAT_MODEL,
                 messages=self.messages,
                 temperature=0.4,
-                max_tokens=300,
+                max_tokens=150,
+                reasoning_effort=None,
             )
-            reply = (response.choices[0].message.content or "").strip()
+            msg = response.choices[0].message
+            reply = (msg.content or msg.reasoning_content or "").strip()
         except Exception as exc:
             print(f"[SARVAM_LLM] error: {exc}")
             reply = "Sorry, could you please repeat that?"
@@ -135,9 +175,24 @@ class SarvamVoiceAgent:
         self.messages.append({"role": "assistant", "content": reply})
         self.on_agent_text(reply)
         await self._speak(reply)
-        if "goodbye" in reply.lower():
-            self._running = False
+        await self._handle_goodbye(reply)
         self._processing = False
+
+    async def _handle_goodbye(self, text: str):
+        if not self._is_goodbye(text) or self._hangup_scheduled:
+            return
+        self._hangup_scheduled = True
+        self._running = False
+        # Let TTS finish before hanging up the telephony leg.
+        playback_seconds = min(max(len(text) * 0.08, 2.5), 8.0)
+        await asyncio.sleep(playback_seconds)
+        if self.on_hangup:
+            try:
+                result = self.on_hangup()
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception as exc:
+                print(f"[SARVAM_HANGUP] error: {exc}")
 
     async def _speak(self, text: str):
         try:

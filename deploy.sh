@@ -17,6 +17,7 @@ ENV_EXAMPLE="${APP_DIR}/.env.example"
 SA_KEY="${APP_DIR}/service_account_key.json"
 SA_KEY_EXAMPLE="${APP_DIR}/service_account_key.json.example"
 UPLOADS_DIR="${APP_DIR}/uploads"
+RECORDINGS_DIR="${ROOT_DIR}/call-recordings"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -62,6 +63,10 @@ setup_gcp_key() {
 
 setup_uploads() {
   mkdir -p "${UPLOADS_DIR}"
+}
+
+setup_call_recordings() {
+  mkdir -p "${RECORDINGS_DIR}"
 }
 
 check_env_values() {
@@ -158,6 +163,7 @@ cmd_start() {
   setup_env
   setup_gcp_key
   setup_uploads
+  setup_call_recordings
   check_env_values
 
   info "Building and starting containers..."

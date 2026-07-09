@@ -1,5 +1,7 @@
 import json
 import traceback
+from urllib.parse import unquote
+
 from fastapi import APIRouter, WebSocket
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 from elevenlabs import ElevenLabs
@@ -13,8 +15,13 @@ from common.config import (
     TELEPHONY_PROVIDER,
     VOICE_AI_PROVIDER,
 )
-from common.functions import end_call_by_internal_id, get_executive_summary
-from common.functions import add_call_staus_to_pubsub
+from common.post_call import link_call_uuid, save_transcript, try_deliver_report
+from common.functions import (
+    add_call_staus_to_pubsub,
+    end_call,
+    end_call_by_internal_id,
+    get_executive_summary,
+)
 from handleAudioCalls.kommuno_audio_interface import KommunoAudioInterface
 from handleAudioCalls.plivo_audio_interface import PlivoAudioInterface
 from handleAudioCalls.sarvam_voice_agent import SarvamVoiceAgent
@@ -105,11 +112,21 @@ async def _run_sarvam_session(
     internal_id: str,
     audio_interface,
 ):
+    async def hangup_active_call():
+        call_uuid = getattr(audio_interface, "call_uuid", None)
+        if call_uuid:
+            print(f"[SARVAM_HANGUP] ending Plivo call {call_uuid}")
+            end_call(call_uuid)
+            return
+        print(f"[SARVAM_HANGUP] no call_uuid; trying Firestore internal_id={internal_id}")
+        end_call_by_internal_id(internal_id, to_phone_number)
+
     agent = SarvamVoiceAgent(
         audio_interface=audio_interface,
         executive_summary=get_executive_summary(to_phone_number),
         on_agent_text=lambda t: print(f"[AGENT] {to_phone_number}: {t}"),
         on_user_text=lambda t: print(f"[USER] {to_phone_number}: {t}"),
+        on_hangup=hangup_active_call,
     )
 
     pcm_buffer = []
@@ -122,11 +139,12 @@ async def _run_sarvam_session(
     elif hasattr(audio_interface, "start"):
         audio_interface.start(on_audio_in)
 
-    await agent.start()
+    greeted = False
+    await agent.prepare()
     conversation_id = agent.conversation_id
 
     try:
-        while agent._running:
+        while True:
             message = await websocket.receive()
             if message["type"] == "websocket.disconnect":
                 break
@@ -137,20 +155,45 @@ async def _run_sarvam_session(
                 continue
             data = json.loads(text_data)
             await _handle_telephony_message(audio_interface, data)
+
+            if not greeted and getattr(audio_interface, "stream_id", None):
+                call_uuid = getattr(audio_interface, "call_uuid", None)
+                if call_uuid:
+                    link_call_uuid(call_uuid, internal_id)
+                await agent.speak_greeting()
+                greeted = True
+
             while pcm_buffer:
                 chunk = pcm_buffer.pop(0)
                 await agent.feed_audio(chunk)
+
+            if greeted and not agent._running:
+                break
     finally:
         await agent.stop()
-        end_call_by_internal_id(internal_id, to_phone_number)
+        conversation = agent.export_conversation()
+        save_transcript(internal_id, conversation)
+        try_deliver_report(internal_id)
+        if not agent._hangup_scheduled:
+            call_uuid = getattr(audio_interface, "call_uuid", None)
+            if call_uuid:
+                end_call(call_uuid)
+            else:
+                end_call_by_internal_id(internal_id, to_phone_number)
         log_conversation_to_firestore(conversation_id, to_phone_number, internal_id)
-        add_call_staus_to_pubsub("", internal_id, to_phone_number, "completed")
+        add_call_staus_to_pubsub(
+            getattr(audio_interface, "call_uuid", "") or "",
+            internal_id,
+            to_phone_number,
+            "completed",
+        )
 
     return conversation_id
 
 
 @router.websocket("/media-stream/{to_phone_number}/{internal_id}")
 async def handle_media_stream(websocket: WebSocket, to_phone_number: str, internal_id: str):
+    to_phone_number = unquote(to_phone_number)
     print(f"[INIT] stack telephony={TELEPHONY_PROVIDER} voice={VOICE_AI_PROVIDER} phone={to_phone_number}")
     await websocket.accept()
 

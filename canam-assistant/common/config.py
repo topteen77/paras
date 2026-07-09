@@ -31,15 +31,19 @@ SARVAM_API_KEY = os.getenv("SARVAM_API_KEY")
 SARVAM_CHAT_MODEL = os.getenv("SARVAM_CHAT_MODEL", "sarvam-30b")
 SARVAM_STT_MODEL = os.getenv("SARVAM_STT_MODEL", "saaras:v3")
 SARVAM_TTS_MODEL = os.getenv("SARVAM_TTS_MODEL", "bulbul:v2")
-SARVAM_TTS_SPEAKER = os.getenv("SARVAM_TTS_SPEAKER", "meera")
+SARVAM_TTS_SPEAKER = os.getenv("SARVAM_TTS_SPEAKER", "anushka")
 SARVAM_LANGUAGE_CODE = os.getenv("SARVAM_LANGUAGE_CODE", "en-IN")
 SARVAM_SYSTEM_PROMPT_PATH = os.getenv(
     "SARVAM_SYSTEM_PROMPT_PATH", "prompts/monica_cold_call.txt"
 )
 
 # --- Shared ---
-NGROK_URL = os.getenv("NGROK_URL")
-WEB_SERVER_URL = os.getenv("WEB_SERVER_URL", NGROK_URL or "http://127.0.0.1:8080")
+NGROK_URL = os.getenv("NGROK_URL") or ""
+WEB_SERVER_URL = (
+    os.getenv("WEB_SERVER_URL") or NGROK_URL or "http://127.0.0.1:8080"
+)
+POST_CALL_WEBHOOK_URL = os.getenv("POST_CALL_WEBHOOK_URL", "").strip() or None
+CALL_RECORDINGS_DIR = os.getenv("CALL_RECORDINGS_DIR", "call-recordings")
 PROJECT_ID = os.getenv("PROJECT_ID")
 QUEUE_NAME = os.getenv("QUEUE_NAME")
 REGION_NAME = os.getenv("REGION_NAME")
