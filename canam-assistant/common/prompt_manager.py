@@ -55,9 +55,19 @@ def get_user_prompt() -> Optional[str]:
     return stripped if stripped else None
 
 
+def _phone_rules_reminder() -> str:
+    return (
+        "\n\nPHONE REMINDER: Output only spoken dialogue (1-2 short sentences + one question). "
+        "Never use numbered lists, markdown, headings, or phrases like 'we are looking for' or 'next detail'. "
+        "When all 6 details are collected, give one brief confirmation and end with Goodbye. "
+        "When the user says goodbye, reply once with a short thank you and Goodbye only."
+    )
+
+
 def get_effective_prompt(executive_summary: str = "") -> str:
     user_prompt = get_user_prompt()
     base = user_prompt if user_prompt else get_default_prompt()
+    base = f"{base.rstrip()}{_phone_rules_reminder()}"
     if executive_summary and executive_summary != "No executive summary available":
         return f"{base}\n\nPrior context:\n{executive_summary}"
     return base

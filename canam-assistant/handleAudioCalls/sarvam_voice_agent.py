@@ -19,7 +19,16 @@ from common.prompt_manager import get_effective_prompt
 
 
 class SarvamVoiceAgent:
-    _GOODBYE_MARKERS = ("goodbye", "good bye", "alvida", "अलविदा", "alvidaa")
+    _GOODBYE_MARKERS = (
+        "goodbye",
+        "good bye",
+        "bye bye",
+        " bye",
+        "alvida",
+        "अलविदा",
+        "alvidaa",
+    )
+    _CLOSING_USER_MARKERS = ("goodbye", "good bye", "bye", "alvida", "अलविदा", "not interested", "i am busy", "busy now")
 
     def __init__(
         self,
@@ -36,6 +45,7 @@ class SarvamVoiceAgent:
         self.conversation_id = str(uuid.uuid4())
         self._running = False
         self._hangup_scheduled = False
+        self._hangup_completed = False
         self._speaking = False
         self._stt_ws = None
         self._stt_context = None
@@ -49,6 +59,14 @@ class SarvamVoiceAgent:
     def _is_goodbye(cls, text: str) -> bool:
         lowered = (text or "").lower()
         return any(marker in lowered for marker in cls._GOODBYE_MARKERS)
+
+    @classmethod
+    def _user_wants_to_end(cls, text: str) -> bool:
+        lowered = (text or "").lower()
+        return any(marker in lowered for marker in cls._CLOSING_USER_MARKERS)
+
+    def should_end_session(self) -> bool:
+        return self._hangup_completed
 
     @classmethod
     def _sanitize_reply(cls, raw: str) -> str:
@@ -80,6 +98,12 @@ class SarvamVoiceAgent:
         text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
         text = re.sub(r"\*([^*]+)\*", r"\1", text)
         text = re.sub(r"#+\s*", "", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        text = re.sub(r"\bwe(?:'re| are) looking for\b.*?(?=[.?!]|$)", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bwhat(?:'s| is) the next detail\b.*?(?=[.?!]|$)", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\blet me confirm\b.*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bso, to confirm\b.*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\b\d+\.\s*", "", text)
         text = re.sub(r"\s+", " ", text).strip()
         if len(text) > 220:
             q_end = text.find("?")
@@ -235,17 +259,27 @@ class SarvamVoiceAgent:
             await self._handle_user_utterance(transcript)
 
     async def _handle_user_utterance(self, text: str):
-        if not text or self._processing:
+        if not text or self._processing or self._hangup_scheduled:
             return
         self._processing = True
         self.on_user_text(text)
         self.messages.append({"role": "user", "content": text})
+
+        if self._user_wants_to_end(text):
+            reply = "Thank you for your time. Your details are saved. Goodbye."
+            self.messages.append({"role": "assistant", "content": reply})
+            self.on_agent_text(reply)
+            await self._speak(reply)
+            await self._handle_goodbye(reply)
+            self._processing = False
+            return
+
         try:
             response = self._client.chat.completions(
                 model=SARVAM_CHAT_MODEL,
                 messages=self.messages,
                 temperature=0.3,
-                max_tokens=80,
+                max_tokens=100,
                 reasoning_effort=None,
             )
             msg = response.choices[0].message
@@ -270,8 +304,7 @@ class SarvamVoiceAgent:
         if not self._is_goodbye(text) or self._hangup_scheduled:
             return
         self._hangup_scheduled = True
-        self._running = False
-        playback_seconds = min(max(len(text) * 0.08, 2.5), 8.0)
+        playback_seconds = min(max(len(text) * 0.07, 2.0), 6.0)
         await asyncio.sleep(playback_seconds)
         if self.on_hangup:
             try:
@@ -280,6 +313,8 @@ class SarvamVoiceAgent:
                     await result
             except Exception as exc:
                 print(f"[SARVAM_HANGUP] error: {exc}")
+        self._hangup_completed = True
+        self._running = False
 
     async def _speak(self, text: str):
         spoken = self._sanitize_reply(text)

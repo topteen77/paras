@@ -1,3 +1,4 @@
+import asyncio
 import json
 import traceback
 from urllib.parse import unquote
@@ -147,7 +148,12 @@ async def _run_sarvam_session(
 
     try:
         while True:
-            message = await websocket.receive()
+            if agent.should_end_session():
+                break
+            try:
+                message = await asyncio.wait_for(websocket.receive(), timeout=0.5)
+            except asyncio.TimeoutError:
+                continue
             if message["type"] == "websocket.disconnect":
                 break
             if message["type"] != "websocket.receive" or "text" not in message:
@@ -169,19 +175,19 @@ async def _run_sarvam_session(
                 chunk = pcm_buffer.pop(0)
                 await agent.feed_audio(chunk)
 
-            if greeted and not agent._running:
+            if greeted and agent.should_end_session():
                 break
     finally:
         await agent.stop()
         conversation = agent.export_conversation()
         save_transcript(internal_id, conversation)
         try_deliver_report(internal_id)
-        if not agent._hangup_scheduled:
-            call_uuid = getattr(audio_interface, "call_uuid", None)
-            if call_uuid:
-                end_call(call_uuid)
-            else:
-                end_call_by_internal_id(internal_id, to_phone_number)
+        call_uuid = getattr(audio_interface, "call_uuid", None)
+        if call_uuid and not agent._hangup_completed:
+            print(f"[SARVAM_HANGUP] fallback hangup for {call_uuid}")
+            end_call(call_uuid)
+        elif not call_uuid and not agent._hangup_completed:
+            end_call_by_internal_id(internal_id, to_phone_number)
         log_conversation_to_firestore(conversation_id, to_phone_number, internal_id)
         add_call_staus_to_pubsub(
             getattr(audio_interface, "call_uuid", "") or "",
