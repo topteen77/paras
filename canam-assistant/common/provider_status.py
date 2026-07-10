@@ -9,6 +9,8 @@ import requests
 from common.config import (
     ELEVENLABS_API_KEY,
     ELEVEN_LABS_COLD_CALLING_AGENT_ID,
+    GEMINI_API_KEY,
+    GEMINI_LIVE_MODEL,
     NGROK_URL,
     PLIVO_AUTH_ID,
     PLIVO_AUTH_TOKEN,
@@ -16,6 +18,8 @@ from common.config import (
     PROJECT_ID,
     SARVAM_API_KEY,
     SARVAM_CHAT_MODEL,
+    TELER_API_KEY,
+    TELER_PHONE_NUMBER,
     TWILIO_ACCOUNT_SID,
     TWILIO_AUTH_TOKEN,
     TWILIO_PHONE_NUMBER,
@@ -185,6 +189,53 @@ def check_twilio() -> dict[str, Any]:
         )
 
 
+def check_frejun() -> dict[str, Any]:
+    configured = bool(TELER_API_KEY and TELER_PHONE_NUMBER)
+    active = get_telephony_provider() == "frejun"
+    if not configured:
+        return _status_result(
+            "frejun",
+            "FreJun Teler",
+            "telephony",
+            False,
+            dashboard_url="https://frejun.ai",
+            active=active,
+        )
+
+    try:
+        response = requests.get(
+            "https://api.frejun.ai/api/v1/",
+            headers={"Authorization": f"Bearer {TELER_API_KEY}"},
+            timeout=12,
+        )
+        working = response.status_code in (200, 404, 405)
+        return _status_result(
+            "frejun",
+            "FreJun Teler",
+            "telephony",
+            True,
+            working,
+            f"API reachable · number {TELER_PHONE_NUMBER}",
+            credits=_credit_block(
+                label="Usage",
+                note="Per-minute PSTN — confirm quote at frejun.ai",
+            ),
+            dashboard_url="https://frejun.ai",
+            active=active,
+        )
+    except Exception as exc:
+        return _status_result(
+            "frejun",
+            "FreJun Teler",
+            "telephony",
+            True,
+            False,
+            str(exc)[:200],
+            dashboard_url="https://frejun.ai",
+            active=active,
+        )
+
+
 def check_elevenlabs() -> dict[str, Any]:
     configured = bool(ELEVENLABS_API_KEY)
     active = get_voice_ai_provider() == "elevenlabs"
@@ -289,6 +340,51 @@ def check_sarvam() -> dict[str, Any]:
             False,
             str(exc),
             dashboard_url="https://dashboard.sarvam.ai/usage",
+            active=active,
+        )
+
+
+def check_gemini() -> dict[str, Any]:
+    configured = bool(GEMINI_API_KEY)
+    active = get_voice_ai_provider() == "gemini"
+    if not configured:
+        return _status_result(
+            "gemini",
+            "Gemini Live",
+            "voice_ai",
+            False,
+            dashboard_url="https://aistudio.google.com/apikey",
+            active=active,
+        )
+
+    try:
+        from google import genai
+
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        client.models.get(model=GEMINI_LIVE_MODEL)
+        return _status_result(
+            "gemini",
+            "Gemini Live",
+            "voice_ai",
+            True,
+            True,
+            f"API reachable · model {GEMINI_LIVE_MODEL}",
+            credits=_credit_block(
+                label="Usage",
+                note="Token-based billing — see Google AI Studio",
+            ),
+            dashboard_url="https://aistudio.google.com/apikey",
+            active=active,
+        )
+    except Exception as exc:
+        return _status_result(
+            "gemini",
+            "Gemini Live",
+            "voice_ai",
+            True,
+            False,
+            str(exc)[:200],
+            dashboard_url="https://aistudio.google.com/apikey",
             active=active,
         )
 
@@ -403,9 +499,11 @@ def check_stack_preset_requirements(preset: dict[str, Any]) -> dict[str, Any]:
 def get_all_providers() -> list[dict[str, Any]]:
     return [
         check_plivo(),
+        check_frejun(),
         check_twilio(),
         check_elevenlabs(),
         check_sarvam(),
+        check_gemini(),
         check_gcp(),
         check_ngrok(),
     ]

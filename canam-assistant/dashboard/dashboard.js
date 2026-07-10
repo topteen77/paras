@@ -11,6 +11,10 @@ const views = {
   recordings: { title: "Recordings", subtitle: "Listen to saved call recordings" },
   tasks: { title: "Calling Tasks", subtitle: "Scheduled and in-progress outbound campaigns" },
   campaign: { title: "New Campaign", subtitle: "Schedule calls individually or in bulk" },
+  practice: {
+    title: "Practice Call",
+    subtitle: "Talk to Monica with headphones before placing a live call",
+  },
   integrations: { title: "Integrations", subtitle: "API credits, connectivity, and stack switching" },
   configuration: { title: "Configuration", subtitle: "Models, phone numbers, callback URLs, and system settings" },
 };
@@ -316,6 +320,7 @@ function renderIntegrations(data) {
     · Telephony: <code>${escapeHtml(active.telephony || "-")}</code>
     · Voice AI: <code>${escapeHtml(active.voice_ai || "-")}</code>
     · Source: ${escapeHtml(active.source || "env")}
+    <br><span class="muted">Switching stacks updates <code>VOICE_AI_PROVIDER</code>, <code>TELEPHONY_PROVIDER</code>, and <code>STACK_NAME</code> immediately — no restart needed.</span>
   `;
 
   $("stack-grid").innerHTML = (data.stacks || [])
@@ -361,8 +366,18 @@ function renderIntegrations(data) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ stack_id: btn.dataset.stack }),
         });
-        showToast(result.message || "Stack switched");
+        if (result.error) {
+          showError(new Error(result.error));
+          return;
+        }
+        const envNote = result.env_synced ? " · .env updated" : "";
+        showToast(
+          `${result.message || "Stack switched"}${envNote}`
+        );
         await loadIntegrations();
+        if (document.getElementById("view-configuration")?.classList.contains("active")) {
+          await loadConfiguration();
+        }
       } catch (error) {
         showError(error);
       }
@@ -468,21 +483,333 @@ function renderPhoneTable(numbers, provider) {
     </table>`;
 }
 
+function renderVoiceSettingsSection(voiceSettings) {
+  if (!voiceSettings) return "";
+  const effective = voiceSettings.effective || {};
+  const speakers = voiceSettings.speakers || [];
+  const currentId = effective.speaker || "anushka";
+
+  const speakerOptions = speakers
+    .map(
+      (s) => `
+      <label class="voice-speaker-option ${s.id === currentId ? "selected" : ""}" data-speaker-id="${escapeHtml(s.id)}">
+        <input type="radio" name="voice-speaker" value="${escapeHtml(s.id)}" ${s.id === currentId ? "checked" : ""} />
+        <div>
+          <strong>${escapeHtml(s.name)} · ${escapeHtml(s.gender)}</strong>
+          <span>${escapeHtml(s.description)}</span>
+        </div>
+      </label>`
+    )
+    .join("");
+
+  const langOptions = (voiceSettings.language_options || [])
+    .map(
+      (o) =>
+        `<option value="${escapeHtml(o.code)}" ${o.code === effective.language_code ? "selected" : ""}>${escapeHtml(o.label)}</option>`
+    )
+    .join("");
+
+  return `
+    <div class="config-section" id="voice-settings-section">
+      <h2>Voice &amp; speaker (Sarvam TTS)</h2>
+      <p>
+        <span class="tag ${voiceSettings.has_saved_override ? "active" : "integrated"}">
+          ${voiceSettings.has_saved_override ? "Custom voice saved" : "Using .env defaults"}
+        </span>
+        · Applies to all new Sarvam calls. Pronunciation map runs automatically before TTS.
+      </p>
+      <div class="voice-settings-grid">
+        <div>
+          <h3>Choose speaker</h3>
+          <div class="voice-speaker-list" id="voice-speaker-list">${speakerOptions}</div>
+        </div>
+        <div class="voice-controls">
+          <h3>TTS tuning</h3>
+          <label>
+            Language
+            <select id="voice-language">${langOptions}</select>
+          </label>
+          <label>
+            Pace <span id="voice-pace-val">${effective.pace ?? 0.95}</span>
+            <input type="range" id="voice-pace" min="0.3" max="3" step="0.05" value="${effective.pace ?? 0.95}" />
+          </label>
+          <label>
+            Pitch <span id="voice-pitch-val">${effective.pitch ?? 0}</span>
+            <input type="range" id="voice-pitch" min="-0.75" max="0.75" step="0.05" value="${effective.pitch ?? 0}" />
+          </label>
+          <label>
+            Loudness <span id="voice-loudness-val">${effective.loudness ?? 1.1}</span>
+            <input type="range" id="voice-loudness" min="0.3" max="3" step="0.05" value="${effective.loudness ?? 1.1}" />
+          </label>
+          <label>
+            <input type="checkbox" id="voice-preprocessing" ${effective.enable_preprocessing !== false ? "checked" : ""} />
+            Enable text preprocessing (numbers, mixed language)
+          </label>
+          <label>
+            Greeting override (optional — call opening uses <strong>Call script</strong> below)
+            <textarea id="voice-greeting" rows="2" placeholder="Leave blank to use Call script intro + question 1">${escapeHtml(effective.greeting || "")}</textarea>
+          </label>
+          <label>
+            Preview text
+            <textarea id="voice-preview-text" rows="2">${escapeHtml(voiceSettings.preview_sample || "")}</textarea>
+          </label>
+          <div class="voice-preview-row">
+            <button class="btn secondary" type="button" id="preview-voice-btn">▶ Hear preview</button>
+            <button class="btn primary" type="button" id="save-voice-btn">Save voice settings</button>
+            <button class="btn secondary" type="button" id="reset-voice-btn" ${voiceSettings.has_saved_override ? "" : "disabled"}>Reset to .env</button>
+          </div>
+          <audio id="voice-preview-audio" class="voice-preview-audio" controls></audio>
+        </div>
+      </div>
+    </div>`;
+}
+
+function bindVoiceSettings(voiceSettings) {
+  const getPayload = () => ({
+    speaker: document.querySelector('input[name="voice-speaker"]:checked')?.value,
+    language_code: $("voice-language")?.value,
+    pace: parseFloat($("voice-pace")?.value || "0.95"),
+    pitch: parseFloat($("voice-pitch")?.value || "0"),
+    loudness: parseFloat($("voice-loudness")?.value || "1.1"),
+    enable_preprocessing: $("voice-preprocessing")?.checked ?? true,
+    greeting: $("voice-greeting")?.value || "",
+    tts_model: voiceSettings?.effective?.tts_model || "bulbul:v2",
+  });
+
+  const syncRangeLabel = (inputId, labelId) => {
+    const input = $(inputId);
+    const label = $(labelId);
+    if (input && label) {
+      input.addEventListener("input", () => {
+        label.textContent = input.value;
+      });
+    }
+  };
+  syncRangeLabel("voice-pace", "voice-pace-val");
+  syncRangeLabel("voice-pitch", "voice-pitch-val");
+  syncRangeLabel("voice-loudness", "voice-loudness-val");
+
+  document.querySelectorAll(".voice-speaker-option").forEach((el) => {
+    el.addEventListener("click", () => {
+      document.querySelectorAll(".voice-speaker-option").forEach((n) => n.classList.remove("selected"));
+      el.classList.add("selected");
+      const radio = el.querySelector('input[type="radio"]');
+      if (radio) radio.checked = true;
+    });
+  });
+
+  $("preview-voice-btn")?.addEventListener("click", async () => {
+    const payload = {
+      ...getPayload(),
+      text: $("voice-preview-text")?.value || "",
+    };
+    try {
+      const response = await fetch(`${API}/voice-settings/preview`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.detail || err.error || `Preview failed (${response.status})`);
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const audio = $("voice-preview-audio");
+      if (audio) {
+        audio.src = url;
+        audio.play().catch(() => {});
+      }
+      showToast("Playing voice preview");
+    } catch (error) {
+      showError(error);
+    }
+  });
+
+  $("save-voice-btn")?.addEventListener("click", async () => {
+    try {
+      const result = await api("/voice-settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(getPayload()),
+      });
+      showToast(result.message || "Voice settings saved");
+      await loadConfiguration();
+    } catch (error) {
+      showError(error);
+    }
+  });
+
+  $("reset-voice-btn")?.addEventListener("click", async () => {
+    try {
+      const result = await api("/voice-settings", { method: "DELETE" });
+      showToast(result.message || "Voice settings reset");
+      await loadConfiguration();
+    } catch (error) {
+      showError(error);
+    }
+  });
+}
+
+const CALL_SCRIPT_SAMPLES = ["Canada", "none", "Masters", "next year", "Mumbai", "Monday at 4 PM"];
+const CALL_SCRIPT_ACKS = ["Certainly.", "Got it.", "Thank you.", "Understood.", "Noted.", "Perfect."];
+
+function buildCallPreviewLocal(intro, questions, closingTemplate) {
+  const qs = (questions || []).map((q) => (q || "").trim());
+  while (qs.length < 6) qs.push(`[question ${qs.length + 1}]`);
+  const lines = ["--- CALL PREVIEW (sample answers) ---"];
+  lines.push(`Monica: ${(intro || "").trim()} ${qs[0]}`);
+  for (let i = 0; i < 6; i++) {
+    lines.push(`You: ${CALL_SCRIPT_SAMPLES[i]}`);
+    if (i < 5) {
+      lines.push(`Monica: ${CALL_SCRIPT_ACKS[i]} ${qs[i + 1]}`);
+    } else {
+      const closing = (closingTemplate || "")
+        .replace("{country}", CALL_SCRIPT_SAMPLES[0])
+        .replace("{other}", CALL_SCRIPT_SAMPLES[1])
+        .replace("{other_part}", "")
+        .replace("{level}", CALL_SCRIPT_SAMPLES[2])
+        .replace("{timeline}", CALL_SCRIPT_SAMPLES[3])
+        .replace("{location}", CALL_SCRIPT_SAMPLES[4])
+        .replace("{callback}", CALL_SCRIPT_SAMPLES[5]);
+      lines.push(`Monica: ${closing || "[confirmation summary] Goodbye."}`);
+    }
+  }
+  lines.push("--- END ---");
+  return lines.join("\n");
+}
+
+function updateCallScriptPreview() {
+  const intro = $("call-script-intro")?.value || "";
+  const questions = [];
+  for (let i = 0; i < 6; i++) {
+    questions.push($(`call-script-q-${i}`)?.value || "");
+  }
+  const closing = $("call-script-closing")?.value || "";
+  const preview = $("call-script-preview");
+  if (preview) {
+    preview.value = buildCallPreviewLocal(intro, questions, closing);
+  }
+}
+
+function renderCallScriptSection(callScript) {
+  if (!callScript) return "";
+  const cs = callScript.effective || callScript;
+  const intro = cs.intro || "";
+  const questions = cs.questions || [];
+  const labels = cs.topic_labels || [];
+  const closing = cs.closing_template || "";
+  const preview = callScript.call_preview || buildCallPreviewLocal(intro, questions, closing);
+
+  const questionFields = Array.from({ length: 6 }, (_, i) => {
+    const label = labels[i] || `Question ${i + 1}`;
+    return `
+      <label class="call-script-question">
+        <span class="call-script-q-label">${i + 1}. ${escapeHtml(label)}</span>
+        <input type="text" id="call-script-q-${i}" data-label="${escapeHtml(label)}" value="${escapeHtml(questions[i] || "")}" />
+      </label>`;
+  }).join("");
+
+  return `
+    <div class="config-section" id="call-script-section">
+      <h2>Call script</h2>
+      <p>
+        <span class="tag ${callScript.has_saved_override ? "active" : "integrated"}">
+          ${callScript.has_saved_override ? "Custom script saved" : "Using defaults"}
+        </span>
+        · Intro and questions used in live calls, practice mode, and the system prompt.
+      </p>
+      <div class="call-script-grid">
+        <div class="call-script-editor">
+          <label>
+            Intro (spoken once at call start)
+            <textarea id="call-script-intro" rows="3" placeholder="Hello, thank you for calling...">${escapeHtml(intro)}</textarea>
+          </label>
+          <h3>Questions (one per turn, in order)</h3>
+          <div class="call-script-questions">${questionFields}</div>
+          <label>
+            Closing template
+            <textarea id="call-script-closing" rows="2">${escapeHtml(closing)}</textarea>
+            <span class="muted small">Placeholders: {country}, {other}, {other_part}, {level}, {timeline}, {location}, {callback}</span>
+          </label>
+          <div class="prompt-actions">
+            <button class="btn primary" type="button" id="save-call-script-btn">Save call script</button>
+            <button class="btn secondary" type="button" id="reset-call-script-btn" ${callScript.has_saved_override ? "" : "disabled"}>Reset to defaults</button>
+          </div>
+        </div>
+        <div class="call-script-preview-panel">
+          <h3>Call preview</h3>
+          <p class="muted small">Sample walkthrough with example answers — updates as you edit.</p>
+          <textarea id="call-script-preview" readonly rows="18">${escapeHtml(preview)}</textarea>
+        </div>
+      </div>
+    </div>`;
+}
+
+function bindCallScript() {
+  ["call-script-intro", "call-script-closing"].forEach((id) => {
+    $(id)?.addEventListener("input", updateCallScriptPreview);
+  });
+  for (let i = 0; i < 6; i++) {
+    $(`call-script-q-${i}`)?.addEventListener("input", updateCallScriptPreview);
+  }
+
+  $("save-call-script-btn")?.addEventListener("click", async () => {
+    const questions = [];
+    const topic_labels = [];
+    for (let i = 0; i < 6; i++) {
+      questions.push($(`call-script-q-${i}`)?.value || "");
+      topic_labels.push($(`call-script-q-${i}`)?.dataset?.label || `Question ${i + 1}`);
+    }
+    try {
+      const result = await api("/call-script", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          intro: $("call-script-intro")?.value || "",
+          questions,
+          topic_labels,
+          closing_template: $("call-script-closing")?.value || "",
+        }),
+      });
+      if (result.error) throw new Error(result.error);
+      showToast(result.message || "Call script saved");
+      await loadConfiguration();
+    } catch (error) {
+      showError(error);
+    }
+  });
+
+  $("reset-call-script-btn")?.addEventListener("click", async () => {
+    try {
+      const result = await api("/call-script", { method: "DELETE" });
+      showToast(result.message || "Reset to defaults");
+      await loadConfiguration();
+    } catch (error) {
+      showError(error);
+    }
+  });
+}
+
 function renderConfiguration(config) {
   const root = $("configuration-root");
   const callbacks = config.callbacks || {};
   const models = config.models || {};
   const phones = config.phone_numbers || {};
   const prompts = config.prompts || {};
+  const callScript = config.call_script || {};
+  const voiceSettings = config.voice_settings || {};
   const sarvam = models.sarvam || {};
   const eleven = models.elevenlabs || {};
+  const gemini = models.gemini || {};
+  const voiceAi = models.voice_ai_provider;
 
   const publicAlert = callbacks.public_url_ok
     ? `<div class="alert ok">Public URL is set: <code>${escapeHtml(callbacks.public_base_url)}</code></div>`
     : `<div class="alert warn">WEB_SERVER_URL is localhost — Plivo/Twilio cannot reach callbacks until ngrok is configured.</div>`;
 
   const modelItems = [];
-  if (models.voice_ai_provider === "sarvam") {
+  if (voiceAi === "sarvam") {
     modelItems.push(
       ["LLM model", sarvam.chat_model],
       ["STT model", sarvam.stt_model],
@@ -492,7 +819,16 @@ function renderConfiguration(config) {
       ["System prompt", sarvam.system_prompt_path],
       ["Prompt file exists", sarvam.system_prompt_exists ? "Yes" : "No"]
     );
-  } else if (models.voice_ai_provider === "elevenlabs") {
+  } else if (voiceAi === "gemini") {
+    modelItems.push(
+      ["Live model", gemini.live_model],
+      ["Language", gemini.language_code],
+      ["Voice name", gemini.voice_name || "Default"],
+      ["API key configured", gemini.api_key_configured ? "Yes" : "No"],
+      ["System prompt", gemini.system_prompt_path],
+      ["Prompt file exists", gemini.system_prompt_exists ? "Yes" : "No"]
+    );
+  } else if (voiceAi === "elevenlabs") {
     modelItems.push(
       ["Cold calling agent", eleven.cold_calling_agent_id || "Not set"],
       ["After-visit agent", eleven.after_visit_feedback_agent_id || "Not set"]
@@ -503,15 +839,18 @@ function renderConfiguration(config) {
     ["Voice AI", models.voice_ai_provider]
   );
 
+  const voiceSection = voiceAi === "sarvam" ? renderVoiceSettingsSection(voiceSettings) : "";
+
+  const promptVoiceStacks = ["sarvam", "gemini"];
+  const callScriptSection = promptVoiceStacks.includes(voiceAi) ? renderCallScriptSection(callScript) : "";
   const usingPrompt = prompts.using === "user" ? "Your custom prompt" : "Default prompt";
-  const promptSection =
-    models.voice_ai_provider === "sarvam"
-      ? `
+  const promptSection = promptVoiceStacks.includes(voiceAi)
+    ? `
     <div class="config-section" id="prompt-section">
       <h2>System prompts</h2>
       <p>
         <span class="tag ${prompts.using === "user" ? "active" : "integrated"}">Active: ${escapeHtml(usingPrompt)}</span>
-        · User prompt overrides default for all new Sarvam calls.
+        · User prompt overrides default for all new ${escapeHtml(voiceAi)} calls.
       </p>
       <div class="prompt-panels">
         <div class="prompt-panel">
@@ -526,7 +865,7 @@ function renderConfiguration(config) {
           <div class="prompt-meta">
             ${prompts.user?.has_override ? `${escapeHtml(prompts.user.path)} · modified ${escapeHtml(prompts.user.modified_at || "")}` : "Not saved yet — edit below and click Save"}
           </div>
-          <textarea id="user-prompt-text" placeholder="Write your custom system prompt here. When saved, this fully replaces the default for outbound Sarvam calls.">${escapeHtml(prompts.user?.content || "")}</textarea>
+          <textarea id="user-prompt-text" placeholder="Write your custom system prompt here. When saved, this replaces the default for outbound calls.">${escapeHtml(prompts.user?.content || "")}</textarea>
           <div class="prompt-actions">
             <button class="btn primary" type="button" id="save-prompt-btn">Save custom prompt</button>
             <button class="btn secondary" type="button" id="reset-prompt-btn" ${prompts.user?.has_override ? "" : "disabled"}>Reset to default</button>
@@ -540,9 +879,14 @@ function renderConfiguration(config) {
   root.innerHTML = `
     ${publicAlert}
 
+    ${voiceSection || (voiceAi !== "sarvam"
+      ? `<div class="config-section"><h2>Voice &amp; speaker</h2><p class="muted">Speaker selection is available when the active stack uses <strong>Sarvam TTS</strong>. For Gemini, switch stack under <strong>Integrations</strong> → Plivo + Gemini.</p></div>`
+      : "")}
+
     <div class="config-section">
       <h2>Active stack</h2>
       <p>${escapeHtml(config.active_stack?.stack_name || "")} · source: ${escapeHtml(config.active_stack?.source || "env")}</p>
+      <p class="muted">Change stack under <strong>Integrations</strong> — updates telephony + voice AI for the next call.</p>
       ${renderKvGrid([
         ["Stack ID", config.active_stack?.stack_id],
         ["Telephony provider", config.active_stack?.telephony],
@@ -555,6 +899,8 @@ function renderConfiguration(config) {
       <p>AI models and agent IDs used for the active voice stack.</p>
       ${renderKvGrid(modelItems)}
     </div>
+
+    ${callScriptSection}
 
     ${promptSection}
 
@@ -651,6 +997,13 @@ function renderConfiguration(config) {
       showToast("Default prompt copied to editor — click Save to apply");
     }
   });
+
+  if (models.voice_ai_provider === "sarvam" && voiceSettings) {
+    bindVoiceSettings(voiceSettings);
+  }
+  if (promptVoiceStacks.includes(voiceAi) && callScript) {
+    bindCallScript();
+  }
 }
 
 async function loadConfiguration() {
@@ -665,6 +1018,7 @@ function bindNavigation() {
       if (btn.dataset.view === "tasks") loadTasks();
       if (btn.dataset.view === "integrations") loadIntegrations().catch(showError);
       if (btn.dataset.view === "configuration") loadConfiguration().catch(showError);
+      if (btn.dataset.view === "practice") ensureTextPracticeSession().catch(showError);
     });
   });
 }
@@ -678,6 +1032,15 @@ function bindFilters() {
   $("task-status-filter").addEventListener("change", () => loadTasks().catch(showError));
   $("refresh-integrations-btn")?.addEventListener("click", () => loadIntegrations().catch(showError));
   $("refresh-config-btn")?.addEventListener("click", () => loadConfiguration().catch(showError));
+  $("jump-voice-btn")?.addEventListener("click", () => {
+    const el = document.getElementById("voice-settings-section");
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+      showToast("Voice & speaker settings");
+    } else {
+      showToast("Voice settings require Sarvam stack — check Integrations");
+    }
+  });
 }
 
 function bindCampaignForms() {
@@ -760,10 +1123,305 @@ function showError(error) {
   showToast(error.message || "Something went wrong");
 }
 
+const practiceState = {
+  ws: null,
+  audioContext: null,
+  micStream: null,
+  processor: null,
+  playbackContext: null,
+  nextPlayTime: 0,
+  micPaused: false,
+  micPauseTimer: null,
+  textSessionId: null,
+  textEnded: false,
+};
+
+function practiceWsUrl() {
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  return `${proto}//${location.host}/ws/simulate`;
+}
+
+function setPracticeStatus(text, extraClass = "") {
+  const el = $("practice-status");
+  if (!el) return;
+  el.textContent = text;
+  el.className = `practice-status ${extraClass}`.trim();
+}
+
+function renderPracticeProgress(flow) {
+  const el = $("practice-progress");
+  if (!el || !flow) return;
+  const n = flow.turn_index || 0;
+  const total = flow.total_questions || 6;
+  const next = flow.next_question ? `Next: ${flow.next_question}` : "Closing";
+  el.textContent = `Progress: ${n}/${total} answered · ${next}`;
+}
+
+function appendPracticeLine(role, text) {
+  const root = $("practice-transcript");
+  if (!root || !text) return;
+  if (root.querySelector(".detail-empty")) {
+    root.innerHTML = "";
+  }
+  const line = document.createElement("div");
+  line.className = `practice-line ${role}`;
+  line.innerHTML = `<div class="role">${role === "user" ? "You" : "Monica"}</div>${escapeHtml(text)}`;
+  root.appendChild(line);
+  root.scrollTop = root.scrollHeight;
+}
+
+function floatTo16BitPCM(float32) {
+  const buffer = new ArrayBuffer(float32.length * 2);
+  const view = new DataView(buffer);
+  for (let i = 0; i < float32.length; i++) {
+    const s = Math.max(-1, Math.min(1, float32[i]));
+    view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+  return new Uint8Array(buffer);
+}
+
+function downsampleBuffer(buffer, inputRate, outputRate) {
+  if (inputRate === outputRate) return buffer;
+  const ratio = inputRate / outputRate;
+  const newLength = Math.round(buffer.length / ratio);
+  const result = new Float32Array(newLength);
+  for (let i = 0; i < newLength; i++) {
+    result[i] = buffer[Math.floor(i * ratio)];
+  }
+  return result;
+}
+
+function bytesToBase64(bytes) {
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+function playPracticePcm(pcmBytes) {
+  if (!practiceState.playbackContext) {
+    practiceState.playbackContext = new AudioContext({ sampleRate: 8000 });
+    practiceState.nextPlayTime = practiceState.playbackContext.currentTime;
+  }
+  const ctx = practiceState.playbackContext;
+  const samples = pcmBytes.length / 2;
+  const audioBuffer = ctx.createBuffer(1, samples, 8000);
+  const channel = audioBuffer.getChannelData(0);
+  const view = new DataView(pcmBytes.buffer, pcmBytes.byteOffset, pcmBytes.byteLength);
+  for (let i = 0; i < samples; i++) {
+    channel[i] = view.getInt16(i * 2, true) / 32768;
+  }
+  const source = ctx.createBufferSource();
+  source.buffer = audioBuffer;
+  source.connect(ctx.destination);
+  const startAt = Math.max(ctx.currentTime, practiceState.nextPlayTime);
+  source.start(startAt);
+  practiceState.nextPlayTime = startAt + audioBuffer.duration;
+}
+
+async function startVoicePractice() {
+  if (practiceState.ws) {
+    showToast("Practice already running");
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true },
+    });
+    practiceState.micStream = stream;
+    const ws = new WebSocket(practiceWsUrl());
+    practiceState.ws = ws;
+
+    ws.onopen = () => {
+      setPracticeStatus("Connected — listening", "live");
+      $("practice-start-btn").disabled = true;
+      $("practice-stop-btn").disabled = false;
+      $("practice-transcript").innerHTML = "";
+      startMicCapture(stream, ws);
+    };
+
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      if (data.event === "transcript" && data.text) {
+        appendPracticeLine(data.role, data.text);
+      }
+      if (data.event === "flow") {
+        renderPracticeProgress(data);
+      }
+      if (data.event === "playAudio" && data.media?.payload) {
+        setPracticeStatus("Monica speaking — wait", "speaking");
+        const durationSec = Number(data.duration) || 3;
+        practiceState.micPaused = true;
+        if (practiceState.micPauseTimer) clearTimeout(practiceState.micPauseTimer);
+        practiceState.micPauseTimer = setTimeout(() => {
+          practiceState.micPaused = false;
+          setPracticeStatus("Your turn — speak now", "live");
+        }, durationSec * 1000 + 450);
+        const raw = atob(data.media.payload);
+        const bytes = new Uint8Array(raw.length);
+        for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+        playPracticePcm(bytes);
+      }
+      if (data.event === "clearAudio") {
+        practiceState.nextPlayTime = practiceState.playbackContext?.currentTime || 0;
+        practiceState.micPaused = false;
+        if (practiceState.micPauseTimer) clearTimeout(practiceState.micPauseTimer);
+      }
+      if (data.event === "started") {
+        showToast("Practice call started");
+      }
+      if (data.event === "flow" && data.all_collected) {
+        setPracticeStatus("Call complete — ending", "");
+      }
+      if (data.event === "ended") {
+        setPracticeStatus("Call ended", "");
+        stopVoicePractice();
+      }
+      if (data.event === "error") {
+        showError(new Error(data.message || "Practice error"));
+        stopVoicePractice();
+      }
+    };
+
+    ws.onerror = () => showError(new Error("WebSocket error"));
+    ws.onclose = () => {
+      if (practiceState.ws === ws) {
+        stopVoicePractice();
+      }
+    };
+  } catch (error) {
+    showError(error);
+    stopVoicePractice();
+  }
+}
+
+function startMicCapture(stream, ws) {
+  const audioContext = new AudioContext();
+  practiceState.audioContext = audioContext;
+  const source = audioContext.createMediaStreamSource(stream);
+  const processor = audioContext.createScriptProcessor(4096, 1, 1);
+  practiceState.processor = processor;
+  processor.onaudioprocess = (e) => {
+    if (practiceState.micPaused) return;
+    if (!practiceState.ws || practiceState.ws.readyState !== WebSocket.OPEN) return;
+    const input = e.inputBuffer.getChannelData(0);
+    const downsampled = downsampleBuffer(input, audioContext.sampleRate, 8000);
+    const pcm = floatTo16BitPCM(downsampled);
+    ws.send(
+      JSON.stringify({
+        event: "media",
+        media: { payload: bytesToBase64(pcm), sampleRate: 8000 },
+      })
+    );
+  };
+  source.connect(processor);
+  processor.connect(audioContext.destination);
+}
+
+function stopVoicePractice() {
+  if (practiceState.ws) {
+    try {
+      practiceState.ws.send(JSON.stringify({ event: "stop" }));
+      practiceState.ws.close();
+    } catch (_) {
+      /* ignore */
+    }
+    practiceState.ws = null;
+  }
+  if (practiceState.processor) {
+    practiceState.processor.disconnect();
+    practiceState.processor = null;
+  }
+  if (practiceState.audioContext) {
+    practiceState.audioContext.close().catch(() => {});
+    practiceState.audioContext = null;
+  }
+  if (practiceState.micStream) {
+    practiceState.micStream.getTracks().forEach((t) => t.stop());
+    practiceState.micStream = null;
+  }
+  if (practiceState.playbackContext) {
+    practiceState.playbackContext.close().catch(() => {});
+    practiceState.playbackContext = null;
+    practiceState.nextPlayTime = 0;
+  }
+  if (practiceState.micPauseTimer) {
+    clearTimeout(practiceState.micPauseTimer);
+    practiceState.micPauseTimer = null;
+  }
+  practiceState.micPaused = false;
+  $("practice-start-btn").disabled = false;
+  $("practice-stop-btn").disabled = true;
+  setPracticeStatus("Idle", "");
+}
+
+async function ensureTextPracticeSession() {
+  if (practiceState.textSessionId && !practiceState.textEnded) return;
+  await startTextPracticeSession();
+}
+
+async function startTextPracticeSession() {
+  const result = await api("/simulate/start", { method: "POST" });
+  practiceState.textSessionId = result.session_id;
+  practiceState.textEnded = false;
+  $("practice-text-input").disabled = false;
+  $("practice-text-send").disabled = false;
+  $("practice-transcript").innerHTML = "";
+  appendPracticeLine("assistant", result.greeting);
+  renderPracticeProgress(result.flow);
+  setPracticeStatus("Text session ready", "live");
+}
+
+async function sendTextPracticeTurn(message) {
+  if (!practiceState.textSessionId) {
+    await startTextPracticeSession();
+  }
+  appendPracticeLine("user", message);
+  const result = await api("/simulate/turn", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: practiceState.textSessionId, message }),
+  });
+  if (result.error) throw new Error(result.error);
+  appendPracticeLine("assistant", result.reply);
+  renderPracticeProgress(result.flow);
+  if (result.ended) {
+    practiceState.textEnded = true;
+    practiceState.textSessionId = null;
+    $("practice-text-input").disabled = true;
+    setPracticeStatus("Session ended", "");
+  }
+}
+
+function bindPracticeForms() {
+  $("practice-start-btn")?.addEventListener("click", () => startVoicePractice().catch(showError));
+  $("practice-stop-btn")?.addEventListener("click", () => stopVoicePractice());
+  $("practice-text-reset")?.addEventListener("click", () => {
+    practiceState.textSessionId = null;
+    practiceState.textEnded = true;
+    startTextPracticeSession().catch(showError);
+  });
+  $("practice-text-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const input = $("practice-text-input");
+    const text = (input?.value || "").trim();
+    if (!text) return;
+    try {
+      await sendTextPracticeTurn(text);
+      input.value = "";
+    } catch (error) {
+      showError(error);
+    }
+  });
+}
+
 async function init() {
   bindNavigation();
   bindFilters();
   bindCampaignForms();
+  bindPracticeForms();
   try {
     await loadCalls();
   } catch (error) {

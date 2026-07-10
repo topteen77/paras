@@ -15,6 +15,10 @@ from common.config import (
     MAX_CALL_RETRY_COUNT,
     MAX_PARRALLEL_REQUESTS_TO_AGENT,
     NGROK_URL,
+    GEMINI_API_KEY,
+    GEMINI_LIVE_MODEL,
+    GEMINI_LANGUAGE_CODE,
+    GEMINI_VOICE_NAME,
     PLIVO_AUTH_ID,
     PLIVO_AUTH_TOKEN,
     PLIVO_PHONE_NUMBER,
@@ -37,6 +41,8 @@ from common.config import (
 from common.post_call import recording_callback_url
 from common.runtime_stack import get_active_stack, get_telephony_provider, get_voice_ai_provider
 from common.prompt_manager import get_prompt_state
+from common.call_script import get_call_script_state
+from common.voice_settings import get_voice_settings_state
 from common.telephony import build_call_webhooks, plivo_console_urls, public_hostname
 
 
@@ -202,6 +208,15 @@ def get_system_configuration() -> dict[str, Any]:
             "cold_calling_agent_id": ELEVEN_LABS_COLD_CALLING_AGENT_ID or None,
             "after_visit_feedback_agent_id": ELEVEN_LABS_AFTER_VISIT_FEEDBACK_AGENT_ID or None,
         }
+    if voice_ai == "gemini":
+        models["gemini"] = {
+            "live_model": GEMINI_LIVE_MODEL,
+            "language_code": GEMINI_LANGUAGE_CODE,
+            "voice_name": GEMINI_VOICE_NAME,
+            "api_key_configured": bool(GEMINI_API_KEY),
+            "system_prompt_path": SARVAM_SYSTEM_PROMPT_PATH,
+            "system_prompt_exists": _prompt_exists(SARVAM_SYSTEM_PROMPT_PATH),
+        }
 
     plivo_numbers = _fetch_plivo_numbers()
     twilio_numbers = _fetch_twilio_numbers()
@@ -257,4 +272,6 @@ def get_system_configuration() -> dict[str, Any]:
             "post_call_configured": bool(POST_CALL_WEBHOOK_URL),
         },
         "prompts": get_prompt_state(),
+        "call_script": get_call_script_state(),
+        "voice_settings": get_voice_settings_state(),
     }

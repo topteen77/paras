@@ -12,18 +12,39 @@ Study-abroad lead-generation platform with AI voice agents, outbound calling, an
 | `deploy.sh` | One-command local Docker + ngrok setup |
 | `switch-stack.sh` | Switch git branch and copy matching `.env` template |
 
+## Deploy stages (preferred order)
+
+Test stacks **1 → 6 sequentially**. Complete local Stages 1–3 on each stack before moving to the next.
+
+| Stage | Action | GCP? |
+|-------|--------|------|
+| 1 | `./deploy.sh` — local Docker + ngrok | No |
+| 2 | `POST /make-call-direct` — test one outbound call | No |
+| 3 | Check `call-recordings/` — Q&A, transcript, MP3 | No |
+| 4 | `/make-call` + batch processor — scheduled calls | Yes |
+| 5 | Cloud Run + `assistantFunctions-main` — production | Yes |
+
+```bash
+./switch-stack.sh 2    # Stack 2 (Plivo-Sarvam) after Stack 1 baseline
+./deploy.sh
+```
+
+Full stage guide and cost tables: **`canam-assistant/stacks/README.md`**
+
 ## Provider stacks (branches)
 
-| # | Branch | Telephony | Voice AI | Status |
-|---|--------|-----------|----------|--------|
-| 1 | `ElevenLabs-Twilio` | Twilio | ElevenLabs Agents | Integrated |
-| 2 | `Plivo-Sarvam` | Plivo | Sarvam STT + LLM + TTS | **Integrated — active local stack** |
-| 3 | `FreJun-Teler` | FreJun Teler | FreJun (bundled) | Scaffold |
-| 4 | `Plivo-ElevenLabs` | Plivo | ElevenLabs Agents | Config ready |
-| 5 | `Smallest-ai-Trikon` | Trikon | Smallest.ai | Scaffold |
-| 6 | `Exotel-Sarvam` | Exotel | Sarvam STT + LLM + TTS | Scaffold |
+| # | Branch | Telephony | Voice AI | Status | Est. cost/min (India) |
+|---|--------|-----------|----------|--------|------------------------|
+| 1 | `ElevenLabs-Twilio` | Twilio | ElevenLabs | Integrated (baseline) | ₹12–15 |
+| 2 | `Plivo-Sarvam` | Plivo | Sarvam | **Active local stack** | **₹2–4** |
+| 3 | `FreJun-Teler-full-stack` | FreJun Teler | FreJun | Scaffold | ₹0.50–2 |
+| 4 | `Plivo-ElevenLabs` | Plivo | ElevenLabs | Config ready | ₹12–14 |
+| 5 | `Smallest-ai-Trikon` | Trikon/Smallest | Smallest.ai | Scaffold | ₹6–12 |
+| 6 | `Exotel-Sarvam` | Exotel | Sarvam | Scaffold | ₹2–5 |
 
-Stack-specific env templates live in `canam-assistant/stacks/`. See `canam-assistant/stacks/README.md` for Plivo console URLs and architecture details.
+**10,000 min/month:** Stack 1 ≈ ₹1.2–1.5L · Stack 2 ≈ ₹20–40K · Stack 3 ≈ ₹5–20K
+
+Stack-specific env templates: `canam-assistant/stacks/`. See `canam-assistant/stacks/README.md` for Plivo URLs, architecture, and detailed cost breakdown.
 
 ---
 
@@ -282,10 +303,15 @@ Upstream references (original projects):
 
 ---
 
-## Estimated cost (Stack 2, India)
+## Cost summary
 
-| Component | Approx. |
-|-----------|---------|
-| Plivo telephony | ~₹0.60/min |
-| Sarvam STT + LLM + TTS | ~₹1–3/min |
-| **Total** | **~₹2–4/min** (vs ~₹12–15/min for Twilio + ElevenLabs) |
+| Stack | Per minute | 10K min/month |
+|-------|------------|---------------|
+| 1 ElevenLabs-Twilio | ₹12–15 | ₹1.2–1.5 lakh |
+| **2 Plivo-Sarvam (active)** | **₹2–4** | **₹20–40K** |
+| 3 FreJun-Teler | ₹0.50–2 | ₹5–20K |
+| 4 Plivo-ElevenLabs | ₹12–14 | ₹1.2–1.4 lakh |
+| 5 Smallest-ai-Trikon | ₹6–12 | ₹60K–1.2L |
+| 6 Exotel-Sarvam | ₹2–5 | ₹20–50K |
+
+Stack 2 breakdown: Plivo ~₹0.60/min + Sarvam ~₹1–3/min. See `canam-assistant/stacks/README.md` for full comparison.

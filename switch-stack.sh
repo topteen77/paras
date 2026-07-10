@@ -10,20 +10,22 @@ usage() {
   echo "Stacks:"
   echo "  1 | ElevenLabs-Twilio     Twilio + ElevenLabs"
   echo "  2 | Plivo-Sarvam          Plivo + Sarvam (custom)"
-  echo "  3 | FreJun-Teler          FreJun full stack (stub)"
+  echo "  3 | FreJun-Teler          FreJun Teler + Sarvam"
   echo "  4 | Plivo-ElevenLabs      Plivo + ElevenLabs"
   echo "  5 | Smallest-ai-Trikon    India SaaS (stub)"
   echo "  6 | Exotel-Sarvam         Exotel + Sarvam (stub)"
+  echo "  7 | Plivo-Gemini          Plivo + Gemini Live"
   exit 1
 }
 
 case "${STACK}" in
   1|ElevenLabs-Twilio)     BRANCH="ElevenLabs-Twilio";     ENV="stacks/1-ElevenLabs-Twilio.env.example" ;;
   2|Plivo-Sarvam)         BRANCH="Plivo-Sarvam";         ENV="stacks/2-Plivo-Sarvam.env.example" ;;
-  3|FreJun-Teler)         BRANCH="FreJun-Teler";         ENV="stacks/3-FreJun-Teler.env.example" ;;
+  3|FreJun-Teler)         BRANCH="Plivo-Sarvam";         ENV="stacks/3-FreJun-Teler.env.example" ;;
   4|Plivo-ElevenLabs)     BRANCH="Plivo-ElevenLabs";     ENV="stacks/4-Plivo-ElevenLabs.env.example" ;;
   5|Smallest-ai-Trikon)   BRANCH="Smallest-ai-Trikon";   ENV="stacks/5-Smallest-ai-Trikon.env.example" ;;
   6|Exotel-Sarvam)        BRANCH="Exotel-Sarvam";        ENV="stacks/6-Exotel-Sarvam.env.example" ;;
+  7|Plivo-Gemini)        BRANCH="Plivo-Sarvam";         ENV="stacks/7-Plivo-Gemini.env.example" ;;
   *) usage ;;
 esac
 

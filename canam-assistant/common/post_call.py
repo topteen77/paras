@@ -115,6 +115,13 @@ def internal_id_for_call_uuid(call_uuid: str) -> Optional[str]:
 def resolve_internal_id(hangup_payload: dict) -> Optional[str]:
     """Map Plivo hangup payload to our internal call id."""
     call_uuid = hangup_payload.get("CallUUID") or hangup_payload.get("call_uuid") or ""
+    if not call_uuid:
+        call_uuid = (
+            hangup_payload.get("call_id")
+            or hangup_payload.get("callId")
+            or hangup_payload.get("id")
+            or ""
+        )
     if call_uuid:
         internal_id = internal_id_for_call_uuid(call_uuid)
         if internal_id:

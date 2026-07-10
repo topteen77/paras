@@ -106,7 +106,7 @@ async def make_call(request: Request):
 
 @router.post("/make-call-direct")
 async def make_call_direct(request: Request):
-    """Initiate outbound call immediately (local Plivo/Twilio testing)."""
+    """Initiate outbound call immediately (Plivo / Teler / Twilio local testing)."""
     data = await request.json()
     to_phone_number = data.get("to")
     internal_id = data.get("internal_id", "")

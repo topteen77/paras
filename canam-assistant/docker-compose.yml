@@ -14,7 +14,8 @@ services:
     volumes:
       # GCP service account key (create from GCP Console → IAM → Service Accounts)
       - ./service_account_key.json:/app/service_account_key.json:ro
-      # Persist uploaded Excel files during schedule-calls
+      # Stack + prompt overrides from dashboard
+      - ./.env:/app/.env
       - ./uploads:/app/uploads
       # Post-call Q&A + recording JSON/MP3 (repo root: Paras/call-recordings)
       - ../call-recordings:/app/call-recordings

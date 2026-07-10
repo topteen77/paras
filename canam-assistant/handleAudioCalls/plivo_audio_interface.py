@@ -9,6 +9,8 @@ from starlette.websockets import WebSocketDisconnect, WebSocketState
 class PlivoAudioInterface:
     """Bidirectional Plivo Audio Stream WebSocket interface."""
 
+    use_mulaw = True
+
     def __init__(self, websocket: WebSocket):
         self.websocket = websocket
         self.stream_id = None
@@ -40,6 +42,20 @@ class PlivoAudioInterface:
 
     def send_audio_threadsafe(self, audio: bytes):
         asyncio.run_coroutine_threadsafe(self.send_audio(audio), self.loop)
+
+    async def clear_audio(self):
+        """Stop queued TTS on the call (barge-in)."""
+        if not self.stream_id:
+            return
+        message = {"event": "clearAudio", "streamId": self.stream_id}
+        try:
+            if self.websocket.application_state == WebSocketState.CONNECTED:
+                await self.websocket.send_text(json.dumps(message))
+        except (WebSocketDisconnect, RuntimeError):
+            pass
+
+    def clear_audio_threadsafe(self):
+        asyncio.run_coroutine_threadsafe(self.clear_audio(), self.loop)
 
     async def handle_plivo_message(self, data: dict):
         event_type = data.get("event")

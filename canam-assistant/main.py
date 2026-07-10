@@ -7,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from common.config import PORT
 import handleAudioCalls.call_routes as call_routes
 import handleAudioCalls.dashboard_routes as dashboard_routes
+import handleAudioCalls.teler_routes as teler_routes
 import handleAudioCalls.websocket_routes as websocket_routes
 
 DASHBOARD_DIR = Path(__file__).resolve().parent / "dashboard"
@@ -22,6 +23,7 @@ app.add_middleware(
 )
 
 app.include_router(call_routes.router, tags=["Call Handling"])
+app.include_router(teler_routes.router, tags=["FreJun Teler"])
 app.include_router(dashboard_routes.router)
 app.include_router(websocket_routes.router, prefix="/ws", tags=["WebSocket Media Stream"])
 
@@ -41,7 +43,7 @@ async def root_dashboard_redirect():
 async def health():
     from common.runtime_stack import get_active_stack, get_telephony_provider, get_voice_ai_provider
     from common.config import WEB_SERVER_URL
-    from common.telephony import plivo_console_urls, public_hostname
+    from common.telephony import plivo_console_urls, public_hostname, teler_console_urls
 
     active = get_active_stack()
     payload = {
@@ -58,6 +60,11 @@ async def health():
         payload["plivo_setup_url"] = "/plivo/setup"
         if WEB_SERVER_URL and not WEB_SERVER_URL.startswith("http://127.0.0.1"):
             payload["plivo_console"] = plivo_console_urls()
+            payload["websocket_host"] = public_hostname()
+    if get_telephony_provider() == "frejun":
+        payload["teler_setup_url"] = "/teler/setup"
+        if WEB_SERVER_URL and not WEB_SERVER_URL.startswith("http://127.0.0.1"):
+            payload["teler_console"] = teler_console_urls()
             payload["websocket_host"] = public_hostname()
     return payload
 

@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Optional
 
 from common.config import STACK_NAME, TELEPHONY_PROVIDER, VOICE_AI_PROVIDER
 
 ACTIVE_STACK_FILE = Path("uploads/active_stack.json")
+ENV_FILE = Path(".env")
 
 STACK_PRESETS: list[dict[str, Any]] = [
     {
@@ -27,6 +29,14 @@ STACK_PRESETS: list[dict[str, Any]] = [
         "description": "Sarvam STT/LLM/TTS over Plivo — lower cost for India",
     },
     {
+        "id": "plivo-gemini",
+        "name": "Plivo + Gemini",
+        "telephony": "plivo",
+        "voice_ai": "gemini",
+        "status": "integrated",
+        "description": "Gemini Live native audio over Plivo — token-based voice AI",
+    },
+    {
         "id": "plivo-elevenlabs",
         "name": "Plivo + ElevenLabs",
         "telephony": "plivo",
@@ -36,11 +46,11 @@ STACK_PRESETS: list[dict[str, Any]] = [
     },
     {
         "id": "frejun-teler",
-        "name": "FreJun Teler",
+        "name": "FreJun Teler + Sarvam",
         "telephony": "frejun",
-        "voice_ai": "frejun",
-        "status": "stub",
-        "description": "Full FreJun stack — not implemented yet",
+        "voice_ai": "sarvam",
+        "status": "integrated",
+        "description": "FreJun Teler PSTN with Sarvam voice — lowest India telephony cost",
     },
     {
         "id": "smallest-trikon",
@@ -130,6 +140,43 @@ def find_preset_by_id(stack_id: str) -> Optional[dict[str, Any]]:
     return None
 
 
+def _sync_env_file(stack_name: str, telephony: str, voice_ai: str) -> bool:
+    """Keep .env aligned with the active stack (survives container restart)."""
+    if not ENV_FILE.is_file():
+        return False
+
+    updates = {
+        "STACK_NAME": stack_name,
+        "TELEPHONY_PROVIDER": telephony,
+        "VOICE_AI_PROVIDER": voice_ai,
+    }
+    lines = ENV_FILE.read_text(encoding="utf-8").splitlines()
+    seen: set[str] = set()
+    new_lines: list[str] = []
+
+    for line in lines:
+        matched = False
+        for key, value in updates.items():
+            if re.match(rf"^\s*{re.escape(key)}\s*=", line):
+                new_lines.append(f"{key}={value}")
+                seen.add(key)
+                matched = True
+                break
+        if not matched:
+            new_lines.append(line)
+
+    missing = [key for key in updates if key not in seen]
+    if missing:
+        if new_lines and new_lines[-1].strip():
+            new_lines.append("")
+        new_lines.append("# Active stack (updated from dashboard)")
+        for key in missing:
+            new_lines.append(f"{key}={updates[key]}")
+
+    ENV_FILE.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+    return True
+
+
 def set_active_stack(stack_id: str) -> dict[str, Any]:
     global _runtime_override
     preset = find_preset_by_id(stack_id)
@@ -147,9 +194,14 @@ def set_active_stack(stack_id: str) -> dict[str, Any]:
     ACTIVE_STACK_FILE.parent.mkdir(parents=True, exist_ok=True)
     ACTIVE_STACK_FILE.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     _runtime_override = payload
+    env_synced = _sync_env_file(preset["name"], preset["telephony"], preset["voice_ai"])
     return {
-        "message": f"Switched to {preset['name']}",
+        "message": (
+            f"Switched to {preset['name']} "
+            f"(telephony={preset['telephony']}, voice_ai={preset['voice_ai']})"
+        ),
         "restart_required": False,
+        "env_synced": env_synced,
         **payload,
     }
 

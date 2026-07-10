@@ -3,19 +3,15 @@ import asyncio
 import audioop
 import base64
 import re
+import time
 import uuid
 
 from sarvamai import AsyncSarvamAI, SarvamAI
 
-from common.config import (
-    SARVAM_API_KEY,
-    SARVAM_CHAT_MODEL,
-    SARVAM_LANGUAGE_CODE,
-    SARVAM_STT_MODEL,
-    SARVAM_TTS_MODEL,
-    SARVAM_TTS_SPEAKER,
-)
+from common.conversation_flow import MonicaConversationFlow
+from common.pronunciation import apply_pronunciation
 from common.prompt_manager import get_effective_prompt
+from common.voice_settings import get_effective_voice_settings
 
 
 class SarvamVoiceAgent:
@@ -28,7 +24,18 @@ class SarvamVoiceAgent:
         "अलविदा",
         "alvidaa",
     )
-    _CLOSING_USER_MARKERS = ("goodbye", "good bye", "bye", "alvida", "अलविदा", "not interested", "i am busy", "busy now")
+    _CLOSING_USER_MARKERS = (
+        "goodbye",
+        "good bye",
+        "bye",
+        "alvida",
+        "अलविदा",
+        "not interested",
+        "i am busy",
+        "busy now",
+    )
+    _MIN_USER_CHARS = 2
+    _PLAYBACK_PAD_S = 0.35
 
     def __init__(
         self,
@@ -37,23 +44,54 @@ class SarvamVoiceAgent:
         on_agent_text=None,
         on_user_text=None,
         on_hangup=None,
+        simulate_mode: bool = False,
     ):
         self.audio_interface = audio_interface
         self.on_agent_text = on_agent_text or (lambda t: None)
         self.on_user_text = on_user_text or (lambda t: None)
         self.on_hangup = on_hangup
+        self.simulate_mode = simulate_mode
         self.conversation_id = str(uuid.uuid4())
         self._running = False
         self._hangup_scheduled = False
         self._hangup_completed = False
         self._speaking = False
+        self._waiting_for_user = False
+        self._agent_audio_until = 0.0
         self._stt_ws = None
         self._stt_context = None
         self._stt_receive_task = None
         self._processing = False
-        self._async_client = AsyncSarvamAI(api_subscription_key=SARVAM_API_KEY)
-        self._client = SarvamAI(api_subscription_key=SARVAM_API_KEY)
-        self.messages = [{"role": "system", "content": self._load_system_prompt(executive_summary)}]
+        self._latest_transcript = ""
+        self._user_speaking = False
+        self._last_user_text = ""
+        self._last_finalized_at = 0.0
+        self._flow = MonicaConversationFlow()
+        self._voice = get_effective_voice_settings()
+        self._base_system_prompt = self._load_system_prompt(executive_summary)
+        self._async_client = AsyncSarvamAI(api_subscription_key=self._api_key())
+        self._client = SarvamAI(api_subscription_key=self._api_key())
+        self.messages = [{"role": "system", "content": self._system_content()}]
+
+    @staticmethod
+    def _api_key():
+        from common.config import SARVAM_API_KEY
+
+        return SARVAM_API_KEY
+
+    def _system_content(self) -> str:
+        return f"{self._base_system_prompt}\n\n{self._flow.llm_context()}"
+
+    def _refresh_system_message(self) -> None:
+        self.messages[0]["content"] = self._system_content()
+
+    async def _notify(self, callback, text: str) -> None:
+        try:
+            result = callback(text)
+            if asyncio.iscoroutine(result):
+                await result
+        except Exception as exc:
+            print(f"[SARVAM] callback error: {exc}")
 
     @classmethod
     def _is_goodbye(cls, text: str) -> bool:
@@ -68,68 +106,56 @@ class SarvamVoiceAgent:
     def should_end_session(self) -> bool:
         return self._hangup_completed
 
+    def flow_state(self) -> dict:
+        return self._flow.state_snapshot()
+
+    def is_agent_playing(self) -> bool:
+        return self._speaking or time.monotonic() < self._agent_audio_until
+
     @classmethod
     def _sanitize_reply(cls, raw: str) -> str:
-        """Keep only natural spoken dialogue; drop markdown and internal slot tracking."""
         if not raw:
             return ""
         text = raw.strip()
-        for marker in (
-            "\n---",
-            "\n***",
-            "\n**Slot",
-            "\nSlot 1:",
-            "\nSlot 2:",
-            "\n(Slot",
-            "\n(If user",
-            "\n**User Input",
-            "\n**Status",
-            "\n**Action",
-        ):
-            idx = text.find(marker)
-            if idx > 0:
-                text = text[:idx].strip()
-        text = re.sub(
-            r"\([^)]*(?:user|slot|assuming|proceed|status|action)[^)]*\)",
-            "",
-            text,
-            flags=re.IGNORECASE,
-        )
         text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
-        text = re.sub(r"\*([^*]+)\*", r"\1", text)
         text = re.sub(r"#+\s*", "", text)
         text = re.sub(r"\s+", " ", text).strip()
-        text = re.sub(r"\bwe(?:'re| are) looking for\b.*?(?=[.?!]|$)", "", text, flags=re.IGNORECASE)
-        text = re.sub(r"\bwhat(?:'s| is) the next detail\b.*?(?=[.?!]|$)", "", text, flags=re.IGNORECASE)
-        text = re.sub(r"\blet me confirm\b.*", "", text, flags=re.IGNORECASE)
-        text = re.sub(r"\bso, to confirm\b.*", "", text, flags=re.IGNORECASE)
-        text = re.sub(r"\b\d+\.\s*", "", text)
-        text = re.sub(r"\s+", " ", text).strip()
-        if len(text) > 220:
-            q_end = text.find("?")
-            if 0 < q_end < 220:
-                text = text[: q_end + 1].strip()
-            else:
-                sentences = re.split(r"(?<=[.!?])\s+", text)
-                text = " ".join(sentences[:3]).strip()
+        q_end = text.find("?")
+        if q_end >= 0:
+            text = text[: q_end + 1].strip()
         return text
 
     def _load_system_prompt(self, executive_summary: str) -> str:
         return get_effective_prompt(executive_summary)
 
     async def prepare(self):
-        """Mark session running. STT connects after greeting so idle timeout does not fire."""
         self._running = True
+        self._voice = get_effective_voice_settings()
+        self._flow.reset()
+        self._waiting_for_user = False
+        self._agent_audio_until = 0.0
+        self._refresh_system_message()
+
+    async def _wait_until_listen_ready(self):
+        while self._running and time.monotonic() < self._agent_audio_until:
+            await asyncio.sleep(0.05)
 
     async def speak_greeting(self):
-        greeting = (
-            "Hello! Ready to explore your study abroad adventure? "
-            "Which country are you most interested in studying in?"
-        )
+        greeting = self._sanitize_reply(self._flow.build_greeting())
         await self._speak(greeting)
-        self.on_agent_text(greeting)
+        await self._notify(self.on_agent_text, greeting)
         self.messages.append({"role": "assistant", "content": greeting})
+        await self._wait_until_listen_ready()
         await self._connect_stt()
+        self._waiting_for_user = True
+        print("[SARVAM] greeting done — listening for caller")
+
+    async def start_text_session(self) -> str:
+        await self.prepare()
+        greeting = self._sanitize_reply(self._flow.build_greeting())
+        self.messages.append({"role": "assistant", "content": greeting})
+        self._waiting_for_user = True
+        return greeting
 
     async def start(self):
         await self.prepare()
@@ -137,6 +163,7 @@ class SarvamVoiceAgent:
 
     async def stop(self):
         self._running = False
+        self._waiting_for_user = False
         if self._stt_receive_task:
             self._stt_receive_task.cancel()
             try:
@@ -164,16 +191,13 @@ class SarvamVoiceAgent:
             "conversation_id": self.conversation_id,
             "transcript": transcript,
             "qa_pairs": build_qa_pairs(self.messages),
+            "flow": self._flow.state_snapshot(),
         }
 
     async def feed_audio(self, pcm16_8k: bytes):
-        if (
-            not self._running
-            or not pcm16_8k
-            or not self._stt_ws
-            or self._speaking
-            or self._processing
-        ):
+        if not self._running or not pcm16_8k or not self._stt_ws:
+            return
+        if not self._waiting_for_user or self.is_agent_playing() or self._processing:
             return
         try:
             audio_b64 = base64.b64encode(pcm16_8k).decode("utf-8")
@@ -186,7 +210,63 @@ class SarvamVoiceAgent:
             print(f"[SARVAM_STT] send error: {exc}")
             await self._reconnect_stt()
 
+    async def _interrupt_agent_speech(self):
+        if not self._speaking and not self.is_agent_playing():
+            return
+        print("[SARVAM] user barge-in — clearing agent audio")
+        self._speaking = False
+        self._agent_audio_until = 0.0
+        if hasattr(self.audio_interface, "clear_audio_threadsafe"):
+            self.audio_interface.clear_audio_threadsafe()
+        elif hasattr(self.audio_interface, "clear_audio"):
+            try:
+                result = self.audio_interface.clear_audio()
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception:
+                pass
+
+    def _is_likely_echo(self, text: str) -> bool:
+        lowered = text.lower().strip()
+        if len(lowered) < self._MIN_USER_CHARS:
+            return True
+        user_words = lowered.split()
+        # Short valid answers (country, level, city) often overlap agent question words.
+        if len(user_words) <= 4:
+            for msg in reversed(self.messages[-3:]):
+                if msg.get("role") != "assistant":
+                    continue
+                agent = (msg.get("content") or "").lower()
+                if len(lowered) > 24 and lowered in agent:
+                    return True
+            return False
+        for msg in reversed(self.messages[-4:]):
+            if msg.get("role") != "assistant":
+                continue
+            agent = (msg.get("content") or "").lower()
+            if not agent:
+                continue
+            if lowered in agent and len(lowered) > 20:
+                return True
+            uw = set(user_words)
+            aw = set(agent.split())
+            if uw and len(uw & aw) / len(uw) > 0.8 and len(uw) >= 5:
+                return True
+        return False
+
+    @staticmethod
+    def _is_speech_start(signal: str) -> bool:
+        s = (signal or "").lower()
+        return "start" in s or s in ("speech_started", "speech_start")
+
+    @staticmethod
+    def _is_speech_end(signal: str) -> bool:
+        s = (signal or "").lower()
+        return "end" in s or s in ("speech_ended", "speech_end", "flush", "utterance_end")
+
     async def _connect_stt(self):
+        from common.config import SARVAM_LANGUAGE_CODE, SARVAM_STT_MODEL
+
         await self._disconnect_stt()
         self._stt_context = self._async_client.speech_to_text_streaming.connect(
             model=SARVAM_STT_MODEL,
@@ -241,71 +321,107 @@ class SarvamVoiceAgent:
             print(f"[SARVAM_STT] receive error: {exc}")
 
     async def _handle_stt_message(self, message):
+        if self.is_agent_playing() or not self._waiting_for_user:
+            return
         msg_type = getattr(message, "type", None)
         if msg_type == "error":
             err = getattr(getattr(message, "data", None), "message", str(message))
             print(f"[SARVAM_STT] server error: {err}")
             return
         if msg_type == "events":
-            signal = getattr(getattr(message, "data", None), "signal_type", "")
+            signal = getattr(getattr(message, "data", None), "signal_type", "") or ""
             if signal:
                 print(f"[SARVAM_STT] vad: {signal}")
+            if self._is_speech_start(signal):
+                self._user_speaking = True
+                if self.is_agent_playing():
+                    await self._interrupt_agent_speech()
+            elif self._is_speech_end(signal):
+                self._user_speaking = False
+                await self._finalize_user_utterance()
             return
         if msg_type != "data":
             return
         transcript = (getattr(getattr(message, "data", None), "transcript", "") or "").strip()
-        if transcript and not self._processing:
-            print(f"[SARVAM_STT] transcript: {transcript}")
-            await self._handle_user_utterance(transcript)
+        if transcript:
+            self._latest_transcript = transcript
+            print(f"[SARVAM_STT] partial: {transcript}")
 
-    async def _handle_user_utterance(self, text: str):
-        if not text or self._processing or self._hangup_scheduled:
+    async def _finalize_user_utterance(self):
+        if not self._waiting_for_user or self.is_agent_playing() or self._processing:
             return
+        text = (self._latest_transcript or "").strip()
+        self._latest_transcript = ""
+        if not text or self._hangup_scheduled:
+            return
+        if self._is_likely_echo(text):
+            print(f"[SARVAM_STT] ignored echo: {text[:60]}")
+            return
+        now = time.monotonic()
+        if now - self._last_finalized_at < 0.8:
+            return
+        await asyncio.sleep(0.15)
+        if self._user_speaking or self.is_agent_playing() or not self._waiting_for_user:
+            return
+        self._last_finalized_at = now
+        await self._handle_user_utterance(text)
+
+    async def _handle_user_utterance(self, text: str, speak: bool = True):
+        if not text or self._processing or self._hangup_scheduled or not self._waiting_for_user:
+            return
+        if self._is_likely_echo(text):
+            return
+
         self._processing = True
-        self.on_user_text(text)
+        self._waiting_for_user = False
+        self._last_user_text = text
+        await self._notify(self.on_user_text, text)
         self.messages.append({"role": "user", "content": text})
+        self._flow.record_user_answer(text)
+        self._refresh_system_message()
 
         if self._user_wants_to_end(text):
-            reply = "Thank you for your time. Your details are saved. Goodbye."
+            reply = "Thank you for your time. Goodbye."
             self.messages.append({"role": "assistant", "content": reply})
-            self.on_agent_text(reply)
-            await self._speak(reply)
-            await self._handle_goodbye(reply)
+            await self._notify(self.on_agent_text, reply)
+            if speak:
+                await self._speak(reply)
+                await self._wait_until_listen_ready()
+            await self._end_call(immediate=True)
             self._processing = False
             return
 
-        try:
-            response = self._client.chat.completions(
-                model=SARVAM_CHAT_MODEL,
-                messages=self.messages,
-                temperature=0.3,
-                max_tokens=100,
-                reasoning_effort=None,
-            )
-            msg = response.choices[0].message
-            raw_reply = (msg.content or "").strip()
-            if not raw_reply:
-                raw_reply = (getattr(msg, "reasoning_content", None) or "").strip()
-            reply = self._sanitize_reply(raw_reply)
-            if raw_reply and reply != raw_reply:
-                print(f"[SARVAM_LLM] sanitized reply ({len(raw_reply)} -> {len(reply)} chars)")
-        except Exception as exc:
-            print(f"[SARVAM_LLM] error: {exc}")
-            reply = "Sorry, could you please repeat that?"
-        if not reply:
-            reply = "Could you please repeat that?"
+        reply = self._flow.build_reply_after_answer()
+        if self._flow.all_collected():
+            reply = reply.strip()
+        else:
+            reply = self._sanitize_reply(reply)
         self.messages.append({"role": "assistant", "content": reply})
-        self.on_agent_text(reply)
-        await self._speak(reply)
-        await self._handle_goodbye(reply)
+        self._refresh_system_message()
+        await self._notify(self.on_agent_text, reply)
+
+        try:
+            if speak:
+                await self._speak(reply)
+                await self._wait_until_listen_ready()
+        finally:
+            if self._flow.all_collected():
+                await self._end_call(immediate=True)
+            else:
+                self._waiting_for_user = True
+                print("[SARVAM] waiting for caller answer")
+
         self._processing = False
 
-    async def _handle_goodbye(self, text: str):
-        if not self._is_goodbye(text) or self._hangup_scheduled:
+    async def _end_call(self, immediate: bool = False):
+        if self._hangup_scheduled:
             return
         self._hangup_scheduled = True
-        playback_seconds = min(max(len(text) * 0.07, 2.0), 6.0)
-        await asyncio.sleep(playback_seconds)
+        self._waiting_for_user = False
+        self._hangup_completed = True
+        self._running = False
+        if not immediate and not self.simulate_mode:
+            await asyncio.sleep(0.5)
         if self.on_hangup:
             try:
                 result = self.on_hangup()
@@ -313,23 +429,38 @@ class SarvamVoiceAgent:
                     await result
             except Exception as exc:
                 print(f"[SARVAM_HANGUP] error: {exc}")
-        self._hangup_completed = True
-        self._running = False
+
+    def _estimate_pcm_duration(self, pcm: bytes) -> float:
+        if not pcm:
+            return 0.0
+        return len(pcm) / (8000 * 2)
 
     async def _speak(self, text: str):
         spoken = self._sanitize_reply(text)
         if not spoken:
             return
+        tts_text = apply_pronunciation(spoken)
         self._speaking = True
+        self._waiting_for_user = False
+        self._voice = get_effective_voice_settings()
+        pcm = b""
         try:
-            tts_response = self._client.text_to_speech.convert(
-                text=spoken,
-                target_language_code=SARVAM_LANGUAGE_CODE,
-                model=SARVAM_TTS_MODEL,
-                speaker=SARVAM_TTS_SPEAKER,
-                speech_sample_rate=8000,
-                enable_preprocessing=True,
-            )
+            kwargs = {
+                "text": tts_text,
+                "target_language_code": self._voice["language_code"],
+                "model": self._voice["tts_model"],
+                "speaker": self._voice["speaker"],
+                "speech_sample_rate": 8000,
+                "enable_preprocessing": self._voice.get("enable_preprocessing", True),
+            }
+            if str(self._voice.get("tts_model", "")).startswith("bulbul:v2"):
+                kwargs["pace"] = self._voice.get("pace", 0.95)
+                kwargs["pitch"] = self._voice.get("pitch", 0.0)
+                kwargs["loudness"] = self._voice.get("loudness", 1.1)
+
+            tts_response = self._client.text_to_speech.convert(**kwargs)
+            if not self._speaking:
+                return
             audios = getattr(tts_response, "audios", None)
             if isinstance(audios, list) and audios:
                 wav_bytes = base64.b64decode(audios[0])
@@ -337,10 +468,17 @@ class SarvamVoiceAgent:
                 wav_bytes = base64.b64decode(audios)
             else:
                 wav_bytes = b""
-            if not wav_bytes:
+            if not wav_bytes or not self._speaking:
                 return
             pcm = wav_bytes[44:] if wav_bytes[:4] == b"RIFF" else wav_bytes
-            self.audio_interface.send_audio_threadsafe(audioop.lin2ulaw(pcm, 2))
+            duration = self._estimate_pcm_duration(pcm)
+            self._agent_audio_until = time.monotonic() + duration + self._PLAYBACK_PAD_S
+            if getattr(self.audio_interface, "use_mulaw", True):
+                self.audio_interface.send_audio_threadsafe(audioop.lin2ulaw(pcm, 2))
+            else:
+                self.audio_interface.send_audio_threadsafe(pcm)
+            if hasattr(self.audio_interface, "notify_playback_duration"):
+                self.audio_interface.notify_playback_duration(duration)
         except Exception as exc:
             print(f"[SARVAM_TTS] error: {exc}")
         finally:

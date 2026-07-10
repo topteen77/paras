@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from common.config import SARVAM_SYSTEM_PROMPT_PATH
+from common.call_script import build_prompt_script_block
 
 USER_PROMPT_PATH = Path("uploads/custom_system_prompt.txt")
 BUILTIN_FALLBACK = (
@@ -57,17 +58,19 @@ def get_user_prompt() -> Optional[str]:
 
 def _phone_rules_reminder() -> str:
     return (
-        "\n\nPHONE REMINDER: Output only spoken dialogue (1-2 short sentences + one question). "
-        "Never use numbered lists, markdown, headings, or phrases like 'we are looking for' or 'next detail'. "
-        "When all 6 details are collected, give one brief confirmation and end with Goodbye. "
-        "When the user says goodbye, reply once with a short thank you and Goodbye only."
+        "\n\nPHONE REMINDER: Intro once, then exactly six questions in order, then closing. "
+        "Output only spoken dialogue (short ack + one question). "
+        "Never echo or paraphrase the caller's answer. Never repeat a question. "
+        "Never use numbered lists, markdown, headings, or internal slot labels. "
+        "If interrupted, answer their latest words only. "
+        "When all 6 details are collected, one brief confirmation and Goodbye."
     )
 
 
 def get_effective_prompt(executive_summary: str = "") -> str:
     user_prompt = get_user_prompt()
     base = user_prompt if user_prompt else get_default_prompt()
-    base = f"{base.rstrip()}{_phone_rules_reminder()}"
+    base = f"{base.rstrip()}\n\n{build_prompt_script_block()}{_phone_rules_reminder()}"
     if executive_summary and executive_summary != "No executive summary available":
         return f"{base}\n\nPrior context:\n{executive_summary}"
     return base

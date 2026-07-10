@@ -7,6 +7,8 @@ load_dotenv()
 # Stack 1: telephony=twilio,  voice=elevenlabs
 # Stack 2: telephony=plivo,   voice=sarvam
 # Stack 4: telephony=plivo,   voice=elevenlabs
+# Stack 3: telephony=frejun,   voice=sarvam (or gemini via dashboard)
+# Stack 7: telephony=plivo,   voice=gemini
 STACK_NAME = os.getenv("STACK_NAME", "ElevenLabs-Twilio")
 TELEPHONY_PROVIDER = os.getenv("TELEPHONY_PROVIDER", os.getenv("AUDIO_PROVIDER", "twilio")).lower()
 VOICE_AI_PROVIDER = os.getenv("VOICE_AI_PROVIDER", "elevenlabs").lower()
@@ -32,10 +34,23 @@ SARVAM_CHAT_MODEL = os.getenv("SARVAM_CHAT_MODEL", "sarvam-30b")
 SARVAM_STT_MODEL = os.getenv("SARVAM_STT_MODEL", "saaras:v3")
 SARVAM_TTS_MODEL = os.getenv("SARVAM_TTS_MODEL", "bulbul:v2")
 SARVAM_TTS_SPEAKER = os.getenv("SARVAM_TTS_SPEAKER", "anushka")
+SARVAM_TTS_PACE = float(os.getenv("SARVAM_TTS_PACE", "0.95"))
+SARVAM_TTS_PITCH = float(os.getenv("SARVAM_TTS_PITCH", "0.0"))
+SARVAM_TTS_LOUDNESS = float(os.getenv("SARVAM_TTS_LOUDNESS", "1.1"))
 SARVAM_LANGUAGE_CODE = os.getenv("SARVAM_LANGUAGE_CODE", "en-IN")
 SARVAM_SYSTEM_PROMPT_PATH = os.getenv(
     "SARVAM_SYSTEM_PROMPT_PATH", "prompts/monica_cold_call.txt"
 )
+
+# --- Gemini Live ---
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+GEMINI_LIVE_MODEL = os.getenv("GEMINI_LIVE_MODEL", "gemini-2.0-flash-live-001")
+GEMINI_VOICE_NAME = os.getenv("GEMINI_VOICE_NAME", "").strip() or None
+GEMINI_LANGUAGE_CODE = os.getenv("GEMINI_LANGUAGE_CODE", "en-IN")
+
+# --- FreJun Teler ---
+TELER_API_KEY = os.getenv("TELER_API_KEY") or os.getenv("FREJUN_API_KEY")
+TELER_PHONE_NUMBER = os.getenv("TELER_PHONE_NUMBER") or os.getenv("FREJUN_PHONE_NUMBER")
 
 # --- Shared ---
 NGROK_URL = os.getenv("NGROK_URL") or ""
@@ -72,6 +87,8 @@ print(f"  TELEPHONY_PROVIDER: {TELEPHONY_PROVIDER}")
 print(f"  VOICE_AI_PROVIDER: {VOICE_AI_PROVIDER}")
 print(f"  ELEVENLABS_API_KEY: {'*' * 5 if ELEVENLABS_API_KEY else 'Not set'}")
 print(f"  SARVAM_API_KEY: {'*' * 5 if SARVAM_API_KEY else 'Not set'}")
+print(f"  GEMINI_API_KEY: {'*' * 5 if GEMINI_API_KEY else 'Not set'}")
+print(f"  TELER_API_KEY: {'*' * 5 if TELER_API_KEY else 'Not set'}")
 print(f"  PLIVO_AUTH_ID: {'*' * 5 if PLIVO_AUTH_ID else 'Not set'}")
 print(f"  TWILIO_ACCOUNT_SID: {'*' * 5 if TWILIO_ACCOUNT_SID else 'Not set'}")
 print(f"  NGROK_URL: {NGROK_URL if NGROK_URL else 'Not set'}")

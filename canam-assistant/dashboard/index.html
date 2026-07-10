@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Canam Call Dashboard</title>
-  <link rel="stylesheet" href="/dashboard/dashboard.css" />
+  <link rel="stylesheet" href="/dashboard/dashboard.css?v=6" />
 </head>
 <body>
   <div class="app">
@@ -18,6 +18,7 @@
         <button class="nav-item" data-view="recordings">Recordings</button>
         <button class="nav-item" data-view="tasks">Calling Tasks</button>
         <button class="nav-item" data-view="campaign">New Campaign</button>
+        <button class="nav-item" data-view="practice">Practice Call</button>
         <button class="nav-item" data-view="integrations">Integrations</button>
         <button class="nav-item" data-view="configuration">Configuration</button>
       </nav>
@@ -156,6 +157,43 @@
         </div>
       </section>
 
+      <section class="view" id="view-practice">
+        <div class="practice-layout">
+          <div class="card wide">
+            <h2>Practice with Monica (headphones + mic)</h2>
+            <p class="subtitle-inline">
+              Same Sarvam agent and prompt as live Plivo calls. Test intro + six questions before dialing.
+            </p>
+            <div class="practice-toolbar">
+              <button class="btn primary" id="practice-start-btn" type="button">Start voice practice</button>
+              <button class="btn secondary" id="practice-stop-btn" type="button" disabled>Stop</button>
+              <span class="practice-status" id="practice-status">Idle</span>
+            </div>
+            <div class="practice-progress" id="practice-progress">Progress: not started</div>
+            <div class="practice-hint" id="practice-hint">
+              Use headphones to avoid echo. Allow microphone access when prompted.
+            </div>
+          </div>
+
+          <div class="card wide">
+            <h2>Live transcript</h2>
+            <div class="practice-transcript" id="practice-transcript">
+              <div class="detail-empty">Start practice to see the conversation.</div>
+            </div>
+          </div>
+
+          <div class="card wide">
+            <h2>Type instead (quick test)</h2>
+            <p class="subtitle-inline">Same logic without microphone — useful for prompt tuning.</p>
+            <form id="practice-text-form" class="form inline">
+              <input type="text" id="practice-text-input" placeholder="Type your answer..." disabled />
+              <button type="submit" class="btn secondary" id="practice-text-send" disabled>Send</button>
+              <button type="button" class="btn secondary" id="practice-text-reset">New text session</button>
+            </form>
+          </div>
+        </div>
+      </section>
+
       <section class="view" id="view-integrations">
         <div class="toolbar">
           <button class="btn secondary" id="refresh-integrations-btn">Refresh status</button>
@@ -179,6 +217,7 @@
       <section class="view" id="view-configuration">
         <div class="toolbar">
           <button class="btn secondary" id="refresh-config-btn">Refresh configuration</button>
+          <button class="btn secondary" id="jump-voice-btn" type="button">Jump to voice &amp; speaker</button>
         </div>
         <div id="configuration-root" class="config-layout">
           <div class="detail-empty">Loading configuration...</div>
@@ -188,6 +227,6 @@
   </div>
 
   <div class="toast" id="toast"></div>
-  <script src="/dashboard/dashboard.js"></script>
+  <script src="/dashboard/dashboard.js?v=7"></script>
 </body>
 </html>
